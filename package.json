@@ -27,6 +27,7 @@
     "pino-http": "^10.5.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
+    "stripe": "^20.4.1",
     "zod": "^3.25.76"
   },
   "devDependencies": {

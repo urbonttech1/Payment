@@ -24,6 +24,16 @@ const esquema = z.object({
 
   /** A dónde avisa el servicio cuando un cobro cambia de estado. */
   URBONT_API_URL: z.string().url().optional(),
+
+  // ── Credenciales de los procesadores ──────────────────────────────────────
+  //
+  // Opcionales a propósito: un adaptador sin credenciales no se monta, y el
+  // servicio arranca igual. Así se puede levantar en local sin claves reales, y
+  // el registro dice en el arranque qué procesadores quedaron disponibles.
+  STRIPE_SECRET_KEY: z.string().startsWith('sk_', 'debe ser una clave secreta (sk_…), no una publicable').optional(),
+  STRIPE_WEBHOOK_SECRET: z.string().optional(),
+  /** Los eventos de Connect llegan por otro endpoint, con su propio secreto. */
+  STRIPE_WEBHOOK_SECRET_CONNECT: z.string().optional(),
 });
 
 export type Config = z.infer<typeof esquema>;

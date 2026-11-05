@@ -4,6 +4,8 @@ import { crearPool, POOL } from './db/pool';
 import { cargarConfig, type Config } from './config/config';
 import { HealthModule } from './health/health.module';
 import { ProvidersModule } from './providers/providers.module';
+import { LedgerModule } from './ledger/ledger.module';
+import { PaymentsModule } from './payments/payments.module';
 
 export const CONFIG = Symbol('CONFIG');
 
@@ -21,6 +23,8 @@ export const CONFIG = Symbol('CONFIG');
     }),
     HealthModule,
     ProvidersModule,
+    LedgerModule,
+    PaymentsModule,
   ],
   providers: [
     { provide: CONFIG, useFactory: (): Config => cargarConfig() },

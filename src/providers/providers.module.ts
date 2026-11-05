@@ -1,22 +1,31 @@
 /**
  * El registro de procesadores.
  *
- * Añadir Square, Adyen, Finix, PayPal o ACH es añadir su módulo a `adaptadores`
- * y nada más: ni el resto del servicio ni la aplicación de URBONT cambian.
+ * Añadir Square, Adyen, Finix, PayPal o ACH es escribir su adaptador y sumarlo
+ * a `montarAdaptadores`. Ni el resto del servicio, ni `urbont-api`, ni la app
+ * se enteran.
  */
 
 import { Global, Module } from '@nestjs/common';
 import { PAYMENT_PROVIDERS, type PaymentProvider } from './provider.port';
 import { ProviderRegistry } from './provider.registry';
 import { cargarConfig } from '../config/config';
+import { crearStripeProvider } from './stripe/stripe.module';
 
-/** Los adaptadores montados. Vacío en la fase 1: el de Stripe llega en la fase 2. */
-const adaptadores: PaymentProvider[] = [];
+/** Los adaptadores que esta instalación puede usar, según sus credenciales. */
+export function montarAdaptadores(): PaymentProvider[] {
+  const posibles: Array<PaymentProvider | null> = [
+    crearStripeProvider(),
+    // crearSquareProvider(),
+    // crearAdyenProvider(),
+  ];
+  return posibles.filter((p): p is PaymentProvider => p !== null);
+}
 
 @Global()
 @Module({
   providers: [
-    { provide: PAYMENT_PROVIDERS, useValue: adaptadores },
+    { provide: PAYMENT_PROVIDERS, useFactory: montarAdaptadores },
     {
       provide: ProviderRegistry,
       inject: [PAYMENT_PROVIDERS],
