@@ -1,0 +1,85 @@
+name: Deploy a ECS
+
+# El despliegue de urbont-api se hace a mano desde el portátil de quien toca.
+# Para un servicio que mueve dinero eso no vale: aquí cada despliegue queda
+# registrado, sale de un commit concreto de master y no usa claves de larga
+# vida — GitHub se autentica contra AWS por OIDC, con un rol que sólo puede
+# tocar este servicio.
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-urbont-payments
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: urbont-payments
+  ECS_CLUSTER: urbont
+  ECS_SERVICE: urbont-payments
+
+permissions:
+  id-token: write   # para OIDC
+  contents: read
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 11 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run typecheck
+      - run: pnpm test
+
+  desplegar:
+    needs: verificar
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Credenciales de AWS por OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::083414536603:role/urbontPaymentsDeployRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Entrar en ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Construir y subir la imagen
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          IMAGEN="$REGISTRY/$ECR_REPOSITORY:${{ github.sha }}"
+          docker buildx build --platform linux/arm64 \
+            --tag "$IMAGEN" \
+            --tag "$REGISTRY/$ECR_REPOSITORY:latest" \
+            --push .
+          echo "IMAGEN=$IMAGEN" >> "$GITHUB_ENV"
+
+      - name: Registrar la definición de tarea
+        id: taskdef
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: taskdef.json
+          container-name: payments
+          image: ${{ env.IMAGEN }}
+
+      - name: Desplegar y esperar a que esté estable
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.taskdef.outputs.task-definition }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          service: ${{ env.ECS_SERVICE }}
+          wait-for-service-stability: true

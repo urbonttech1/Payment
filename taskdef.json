@@ -1,0 +1,66 @@
+{
+  "family": "urbont-payments",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "runtimePlatform": {
+    "cpuArchitecture": "ARM64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "executionRoleArn": "arn:aws:iam::083414536603:role/urbontPaymentsExecutionRole",
+  "taskRoleArn": "arn:aws:iam::083414536603:role/urbontPaymentsTaskRole",
+  "containerDefinitions": [
+    {
+      "name": "payments",
+      "image": "083414536603.dkr.ecr.us-east-1.amazonaws.com/urbont-payments:latest",
+      "essential": true,
+      "stopTimeout": 15,
+      "portMappings": [{ "containerPort": 8080, "protocol": "tcp" }],
+      "environment": [
+        { "name": "NODE_ENV", "value": "production" },
+        { "name": "PORT", "value": "8080" },
+        { "name": "LOG_LEVEL", "value": "info" },
+        { "name": "PAYMENT_PROVIDER", "value": "stripe" },
+        { "name": "URBONT_API_URL", "value": "https://api.urbont.com" }
+      ],
+      "secrets": [
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:083414536603:secret:urbont/payments/DATABASE_URL"
+        },
+        {
+          "name": "SERVICE_SHARED_SECRET",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:083414536603:secret:urbont/payments/SERVICE_SHARED_SECRET"
+        },
+        {
+          "name": "STRIPE_SECRET_KEY",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:083414536603:secret:urbont/payments/STRIPE_SECRET_KEY"
+        },
+        {
+          "name": "STRIPE_WEBHOOK_SECRET",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:083414536603:secret:urbont/payments/STRIPE_WEBHOOK_SECRET"
+        }
+      ],
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "node -e \"fetch('http://localhost:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""
+        ],
+        "interval": 30,
+        "timeout": 10,
+        "retries": 3,
+        "startPeriod": 40
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/urbont-payments",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "payments",
+          "awslogs-create-group": "true"
+        }
+      }
+    }
+  ]
+}
