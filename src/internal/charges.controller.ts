@@ -31,6 +31,7 @@ import {
 } from '@nestjs/common';
 import { z } from 'zod';
 import { PaymentsService, type PeticionDeCobro } from '../payments/payments.service';
+import { SplitsService, type PeticionDeReparto, type ResultadoDeReparto } from '../splits/splits.service';
 import type { Transaction } from '../ledger/transactions.repository';
 import { TransaccionNoEncontradaError } from '../payments/payments.service';
 import { ErroresDePagoFilter } from './errores.filter';
@@ -58,6 +59,33 @@ const cuerpoDeCobro = z.object({
 });
 
 const cuerpoDeCaptura = z.object({ amountCents: CENTAVOS.optional() });
+
+const CENTAVOS_0 = z.number().int().min(0).max(99_999_999);
+
+const cuerpoDeReparto = z.object({
+  taxCents: CENTAVOS_0.optional(),
+  valetCents: CENTAVOS_0.optional(),
+  bookingFeeCents: CENTAVOS_0.optional(),
+  accessFeeCents: CENTAVOS_0.optional(),
+  /** Si no viene, la del servicio (`PLATFORM_COMMISSION_RATE`). */
+  commissionRate: z.number().min(0).max(0.5).optional(),
+  driverDeductionCents: CENTAVOS_0.optional(),
+  driverDeductionMemo: z.string().max(200).optional(),
+  beneficiarios: z
+    .array(
+      z.object({
+        type: z.enum(['driver', 'valet']),
+        id: z.string().uuid(),
+        /** Su cuenta en el procesador. Sólo se usa la primera vez. */
+        payeeRef: z.string().min(1).max(128).optional(),
+        country: z.string().length(2).optional(),
+      }),
+    )
+    .max(4)
+    .default([]),
+  /** Modo sombra: calcula y apunta, sin mover un centavo. */
+  dryRun: z.boolean().default(false),
+});
 
 const cuerpoDeReembolso = z.object({
   amountCents: CENTAVOS.optional(),
@@ -113,7 +141,10 @@ function aRespuesta(tx: Transaction, clientSecret?: string | null): RespuestaDeC
 @UseGuards(FirmaGuard)
 @UseFilters(ErroresDePagoFilter)
 export class ChargesController {
-  constructor(private readonly payments: PaymentsService) {}
+  constructor(
+    private readonly payments: PaymentsService,
+    private readonly splits: SplitsService,
+  ) {}
 
   /**
    * Autoriza (o cobra) un importe.
@@ -165,6 +196,34 @@ export class ChargesController {
       ...aRespuesta(transaccion),
       refund: { providerRef: reembolso.providerRef, refundedCents: reembolso.refunded },
     };
+  }
+
+  /**
+   * Reparte un cobro ya capturado entre el chofer, el valet y URBONT.
+   *
+   * El importe NO viene en el cuerpo: sale de lo que el libro dice que se
+   * capturó. Lo que viene son los datos que el micro no tiene todavía —el
+   * impuesto, el recargo del valet, el booking, el aeropuerto y la comisión
+   * vigente—, que hoy siguen viviendo en la base de `urbont-api`.
+   *
+   * Con `dryRun`, calcula y apunta el reparto sin mover dinero: es el modo con
+   * el que se enciende esto en producción, comparando contra lo que hizo
+   * `urbont-api` antes de dejarle pagar de verdad.
+   */
+  @Post(':clave/settle')
+  @HttpCode(200)
+  async liquidar(@Param('clave') clave: string, @Body() body: unknown): Promise<ResultadoDeReparto> {
+    const datos = validar(cuerpoDeReparto, body ?? {});
+    return this.splits.liquidar(validar(CLAVE, clave), datos as PeticionDeReparto);
+  }
+
+  /** El reparto de un cobro, tal como esté. No calcula ni paga nada. */
+  @Get(':clave/splits')
+  async reparto(@Param('clave') clave: string): Promise<ResultadoDeReparto> {
+    const validada = validar(CLAVE, clave);
+    const r = await this.splits.consultar(validada);
+    if (!r) throw new TransaccionNoEncontradaError(validada);
+    return r;
   }
 
   /**

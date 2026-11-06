@@ -32,12 +32,33 @@ src/
     provider.registry.ts   Qué procesador atiende cada operación
     stripe/                Adaptador Stripe        ← fase 2
   payments/    Casos de uso: autorizar, capturar, reembolsar   ← fase 2
-  ledger/      Libro contable e idempotencia                   ← fase 2
+  ledger/      Libro de cobros, asientos e idempotencia        ← fases 2 y 4
+  internal/    Lo que llama urbont-api, firmado                ← fase 3
   splits/      Reparto: chofer, valet, plataforma              ← fase 4
+  payees/      La cuenta de cobro de cada persona, por procesador ← fase 4
   webhooks/    Un endpoint por procesador, firma e idempotencia ← fase 6
   reconciliation/ Cuadre diario contra el extracto             ← fase 6
 db/migrations/ Esquema `payments`, aplicado al arrancar
 ```
+
+## Lo que expone
+
+Nada de esto lo llama la app: sólo `urbont-api`, y firmado (ver
+`src/internal/firma.ts`).
+
+| | |
+|---|---|
+| `POST /internal/charges` | Autoriza o cobra. La clave de idempotencia va en la cabecera `Idempotency-Key` y es la dirección del cobro a partir de ahí. |
+| `GET /internal/charges/:clave` | El cobro, o 404. Es la pregunta «¿este cobro es tuyo?». |
+| `POST /internal/charges/:clave/capture` | Cobra lo retenido. Con un importe mayor, sube antes la autorización. |
+| `POST /internal/charges/:clave/void` | Suelta una retención. |
+| `POST /internal/charges/:clave/refund` | Devuelve dinero ya cobrado. |
+| `POST /internal/charges/:clave/settle` | Reparte lo capturado entre chofer, valet y URBONT. Con `dryRun`, sólo calcula. |
+| `GET /internal/charges/:clave/splits` | El reparto, tal como esté. |
+| `GET /healthz`, `GET /readyz` | Sondas. Sin firma. |
+
+El importe nunca viaja en el cuerpo de `settle`: sale de lo que el libro dice
+que se capturó.
 
 ## Las dos reglas que gobiernan el diseño
 
@@ -50,6 +71,15 @@ db/migrations/ Esquema `payments`, aplicado al arrancar
    identificadores de URBONT y resuelve cuánto y a quién contra su propia base
    de datos. Es lo que cierra, por construcción, los fallos que la auditoría de
    septiembre encontró en `urbont-api`.
+
+   Para el reparto, esto significa dos cosas concretas: lo que se reparte es lo
+   que el libro dice que se capturó, y la cuenta de cobro de una persona se
+   registra **una vez** y después manda la registrada. Cambiarla es una
+   operación explícita, no un efecto colateral de pagar un viaje.
+
+Y una invariante que las pruebas comprueban en cada reparto: **la suma de las
+partes es exactamente lo capturado**, y **los asientos de un cobro suman cero**.
+Un reparto que no cuadra es dinero que aparece o desaparece.
 
 ## Puesta en marcha
 

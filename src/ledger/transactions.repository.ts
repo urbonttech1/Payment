@@ -26,6 +26,13 @@ export interface Transaction {
   idempotencyKey: string;
   provider: ProviderName;
   providerRef: string | null;
+  /**
+   * El cargo dentro del cobro, cuando el procesador los distingue.
+   *
+   * Es lo que financia las transferencias del reparto y por donde concilia el
+   * extracto del procesador, que no habla de cobros sino de cargos.
+   */
+  chargeRef: string | null;
   kind: ChargeKind;
   rideId: string | null;
   payerId: string | null;
@@ -72,7 +79,7 @@ export interface TransactionsRepository {
 
   /** Guarda la referencia del procesador en cuanto se conoce. */
   marcarAutorizada(id: string, providerRef: string): Promise<Transaction>;
-  marcarCapturada(id: string, providerRef: string, capturado: Cents): Promise<Transaction>;
+  marcarCapturada(id: string, providerRef: string, capturado: Cents, chargeRef?: string | null): Promise<Transaction>;
   marcarFallida(id: string, codigo: string): Promise<Transaction>;
   marcarAnulada(id: string): Promise<Transaction>;
   marcarReembolsada(id: string): Promise<Transaction>;

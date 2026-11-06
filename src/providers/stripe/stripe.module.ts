@@ -8,14 +8,19 @@
 
 import { Module } from '@nestjs/common';
 import Stripe from 'stripe';
-import { cargarConfig } from '../../config/config';
+import { CONFIG, type Config } from '../../config/config';
 import { StripeProvider } from './stripe.provider';
 
 export const STRIPE_PROVIDER = Symbol('STRIPE_PROVIDER');
 
-/** El adaptador, o `null` si esta instalación no tiene credenciales de Stripe. */
-export function crearStripeProvider(): StripeProvider | null {
-  const config = cargarConfig();
+/**
+ * El adaptador, o `null` si esta instalación no tiene credenciales de Stripe.
+ *
+ * La configuración llega como argumento y no se lee de `process.env` aquí: así
+ * el grafo de módulos no depende del entorno del proceso, y se puede levantar
+ * el servicio en una prueba sin inventarle un entorno completo.
+ */
+export function crearStripeProvider(config: Config): StripeProvider | null {
   if (!config.STRIPE_SECRET_KEY) return null;
 
   const stripe = new Stripe(config.STRIPE_SECRET_KEY, {
@@ -34,7 +39,7 @@ export function crearStripeProvider(): StripeProvider | null {
 }
 
 @Module({
-  providers: [{ provide: STRIPE_PROVIDER, useFactory: crearStripeProvider }],
+  providers: [{ provide: STRIPE_PROVIDER, inject: [CONFIG], useFactory: crearStripeProvider }],
   exports: [STRIPE_PROVIDER],
 })
 export class StripeModule {}

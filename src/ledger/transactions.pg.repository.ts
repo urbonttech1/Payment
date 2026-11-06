@@ -24,6 +24,7 @@ interface Fila {
   idempotency_key: string;
   provider: string;
   provider_ref: string | null;
+  charge_ref: string | null;
   kind: string;
   ride_id: string | null;
   payer_id: string | null;
@@ -39,7 +40,7 @@ interface Fila {
 }
 
 const COLUMNAS = `
-  id, idempotency_key, provider, provider_ref, kind, ride_id, payer_id,
+  id, idempotency_key, provider, provider_ref, charge_ref, kind, ride_id, payer_id,
   amount_cents, tax_cents, currency, status,
   authorized_at, captured_at, failed_at, failure_code, created_at
 `;
@@ -50,6 +51,7 @@ function aTransaccion(f: Fila): Transaction {
     idempotencyKey: f.idempotency_key,
     provider: f.provider as Transaction['provider'],
     providerRef: f.provider_ref,
+    chargeRef: f.charge_ref,
     kind: f.kind as Transaction['kind'],
     rideId: f.ride_id,
     payerId: f.payer_id,
@@ -135,14 +137,23 @@ export class PgTransactionsRepository implements TransactionsRepository {
     );
   }
 
-  async marcarCapturada(id: string, providerRef: string, capturado: Cents): Promise<Transaction> {
+  async marcarCapturada(
+    id: string,
+    providerRef: string,
+    capturado: Cents,
+    chargeRef?: string | null,
+  ): Promise<Transaction> {
     // El importe capturado puede ser menor que el autorizado (una cancelación
     // con penalización), y es el que manda para repartir.
+    //
+    // `charge_ref` sólo se escribe si viene: un COALESCE y no una asignación,
+    // porque un reintento que no lo traiga no debe borrar el que ya había.
     return this.actualizar(
       `UPDATE payments.transactions
-          SET status='captured', provider_ref=$2, amount_cents=$3, captured_at=NOW(), updated_at=NOW()
+          SET status='captured', provider_ref=$2, amount_cents=$3,
+              charge_ref=COALESCE($4, charge_ref), captured_at=NOW(), updated_at=NOW()
         WHERE id=$1 RETURNING ${COLUMNAS}`,
-      [id, providerRef, capturado],
+      [id, providerRef, capturado, chargeRef ?? null],
     );
   }
 

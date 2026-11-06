@@ -6,6 +6,7 @@ import { HealthModule } from './health/health.module';
 import { ProvidersModule } from './providers/providers.module';
 import { LedgerModule } from './ledger/ledger.module';
 import { PaymentsModule } from './payments/payments.module';
+import { SplitsModule } from './splits/splits.module';
 import { InternalModule } from './internal/internal.module';
 
 export { CONFIG };
@@ -26,6 +27,7 @@ export { CONFIG };
     ProvidersModule,
     LedgerModule,
     PaymentsModule,
+    SplitsModule,
     InternalModule,
   ],
   providers: [

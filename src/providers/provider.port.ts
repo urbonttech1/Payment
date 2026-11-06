@@ -84,6 +84,14 @@ export interface Authorization {
   currency: Currency;
   /** Lo que el cliente necesita para terminar el cobro, si hace falta. */
   clientSecret?: string;
+  /**
+   * El cargo concreto dentro del cobro, cuando el procesador los distingue.
+   *
+   * Hace falta para repartir: la transferencia a un chofer va atada al cargo
+   * del que sale, no al cobro. Y es lo que aparece en el extracto del
+   * procesador, así que es por donde se concilia.
+   */
+  chargeRef?: string;
   /** Tal como vino del proveedor, para poder auditar sin volver a preguntar. */
   raw?: unknown;
 }

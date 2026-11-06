@@ -13,13 +13,16 @@ import type { INestApplication } from '@nestjs/common';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CONFIG, type Config } from '../config/config';
+import { POOL } from '../db/pool';
 import { InternalModule } from './internal.module';
 import { PaymentsService, EstadoInesperadoError, TransaccionNoEncontradaError } from '../payments/payments.service';
+import { SplitsService } from '../splits/splits.service';
 import { PagoRechazadoError, ProcesadorFalloError } from '../providers/provider.port';
 import { cabecerasDeFirma } from './firma';
 
 const SECRETO = 'secreto-compartido-de-prueba';
 const CLAVE = 'ride_abc-123_authorize';
+const DRIVER = 'd1e2f3a4-5b6c-4d7e-8f90-1a2b3c4d5e6f';
 
 const transaccion = {
   id: 'tx-1',
@@ -48,10 +51,29 @@ const servicioFalso = {
   porClave: vi.fn(),
 };
 
+const repartoFalso = {
+  liquidar: vi.fn(),
+  consultar: vi.fn(),
+};
+
 @Global()
 @Module({
-  providers: [{ provide: CONFIG, useValue: { SERVICE_SHARED_SECRET: SECRETO } as Config }],
-  exports: [CONFIG],
+  providers: [
+    {
+      provide: CONFIG,
+      // Lo justo para levantar el grafo: sin clave de Stripe no se monta ningún
+      // adaptador, y aquí no hace falta ninguno porque los servicios son falsos.
+      useValue: {
+        SERVICE_SHARED_SECRET: SECRETO,
+        PAYMENT_PROVIDER: 'stripe',
+        PLATFORM_COMMISSION_RATE: 0.15,
+      } as Config,
+    },
+    // Los repositorios del grafo piden el pool aunque en esta prueba nadie
+    // consulte nada: los servicios que lo harían están sustituidos.
+    { provide: POOL, useValue: { query: async () => ({ rows: [], rowCount: 0 }) } },
+  ],
+  exports: [CONFIG, POOL],
 })
 class ConfigDePrueba {}
 
@@ -85,6 +107,8 @@ beforeAll(async () => {
   const mod = await Test.createTestingModule({ imports: [ConfigDePrueba, InternalModule] })
     .overrideProvider(PaymentsService)
     .useValue(servicioFalso)
+    .overrideProvider(SplitsService)
+    .useValue(repartoFalso)
     .compile();
 
   app = mod.createNestApplication({ rawBody: true });
@@ -107,7 +131,25 @@ beforeEach(() => {
     reembolso: { providerRef: 're_1', provider: 'stripe', refunded: 11000, currency: 'USD' },
   });
   servicioFalso.porClave.mockResolvedValue(transaccion);
+  repartoFalso.liquidar.mockResolvedValue({
+    chargeKey: CLAVE,
+    transactionId: 'tx-1',
+    capturedCents: 11715,
+    dryRun: false,
+    partes: [
+      { type: 'driver', beneficiaryId: DRIVER, amountCents: 7400, deductionCents: 0, status: 'paid', transferRef: 'tr_1', failureCode: null },
+      { type: 'platform', beneficiaryId: null, amountCents: 4315, deductionCents: 0, status: 'paid', transferRef: null, failureCode: null },
+    ],
+  });
+  repartoFalso.consultar.mockResolvedValue({
+    chargeKey: CLAVE,
+    transactionId: 'tx-1',
+    capturedCents: 11715,
+    dryRun: false,
+    partes: [],
+  });
 });
+
 
 const cobro = { kind: 'ride', amountCents: 11000, taxCents: 715, currency: 'USD', hold: true, rideId: 'b0a1c2d3-4e5f-4a6b-8c7d-9e0f1a2b3c4d' };
 
@@ -245,6 +287,81 @@ describe('capturar, anular, reembolsar y consultar', () => {
   it('consultar un cobro que no existe es 404, que es la señal de «no es mío»', async () => {
     servicioFalso.porClave.mockResolvedValueOnce(null);
     const r = await llamar('GET', `/internal/charges/${CLAVE}`);
+    expect(r.estado).toBe(404);
+    expect(r.cuerpo).toMatchObject({ error: 'CHARGE_NOT_FOUND' });
+  });
+});
+
+describe('repartir', () => {
+  it('reparte lo capturado y devuelve las partes', async () => {
+    const r = await llamar('POST', `/internal/charges/${CLAVE}/settle`, {
+      cuerpo: {
+        taxCents: 715,
+        valetCents: 0,
+        bookingFeeCents: 250,
+        commissionRate: 0.15,
+        beneficiarios: [{ type: 'driver', id: DRIVER, payeeRef: 'acct_123' }],
+      },
+    });
+
+    expect(r.estado).toBe(200);
+    expect(repartoFalso.liquidar).toHaveBeenCalledWith(
+      CLAVE,
+      expect.objectContaining({
+        taxCents: 715,
+        bookingFeeCents: 250,
+        commissionRate: 0.15,
+        dryRun: false,
+        beneficiarios: [{ type: 'driver', id: DRIVER, payeeRef: 'acct_123' }],
+      }),
+    );
+    expect(r.cuerpo).toMatchObject({ capturedCents: 11715, dryRun: false });
+  });
+
+  // El importe NO viaja en el cuerpo: sale de lo que el libro dice que entró.
+  // Es la garantía de que nadie puede repartir más de lo que se cobró.
+  it('el cuerpo no tiene forma de decir cuánto se capturó', async () => {
+    await llamar('POST', `/internal/charges/${CLAVE}/settle`, {
+      cuerpo: { capturedCents: 999_999, amountCents: 999_999, beneficiarios: [] },
+    });
+    const [, datos] = repartoFalso.liquidar.mock.calls[0];
+    expect(datos).not.toHaveProperty('capturedCents');
+    expect(datos).not.toHaveProperty('amountCents');
+  });
+
+  it('el modo sombra llega como tal', async () => {
+    await llamar('POST', `/internal/charges/${CLAVE}/settle`, { cuerpo: { dryRun: true, beneficiarios: [] } });
+    expect(repartoFalso.liquidar).toHaveBeenCalledWith(CLAVE, expect.objectContaining({ dryRun: true }));
+  });
+
+  it('sin cuerpo, reparte con lo que haya en el libro y sin beneficiarios', async () => {
+    const r = await llamar('POST', `/internal/charges/${CLAVE}/settle`, { cuerpo: {} });
+    expect(r.estado).toBe(200);
+    expect(repartoFalso.liquidar).toHaveBeenCalledWith(CLAVE, expect.objectContaining({ beneficiarios: [] }));
+  });
+
+  it('una tasa imposible o un beneficiario sin uuid se rechazan aquí', async () => {
+    for (const cuerpo of [
+      { commissionRate: 0.9, beneficiarios: [] },
+      { beneficiarios: [{ type: 'driver', id: 'pepe' }] },
+      { beneficiarios: [{ type: 'inventado', id: DRIVER }] },
+      { taxCents: -1, beneficiarios: [] },
+    ]) {
+      const r = await llamar('POST', `/internal/charges/${CLAVE}/settle`, { cuerpo });
+      expect(r.estado).toBe(400);
+    }
+    expect(repartoFalso.liquidar).not.toHaveBeenCalled();
+  });
+
+  it('repartir un cobro sin capturar es 409', async () => {
+    repartoFalso.liquidar.mockRejectedValueOnce(new EstadoInesperadoError('sólo se reparte un cobro capturado'));
+    const r = await llamar('POST', `/internal/charges/${CLAVE}/settle`, { cuerpo: { beneficiarios: [] } });
+    expect(r.estado).toBe(409);
+  });
+
+  it('consultar el reparto de un cobro que no se repartió es 404', async () => {
+    repartoFalso.consultar.mockResolvedValueOnce(null);
+    const r = await llamar('GET', `/internal/charges/${CLAVE}/splits`);
     expect(r.estado).toBe(404);
     expect(r.cuerpo).toMatchObject({ error: 'CHARGE_NOT_FOUND' });
   });

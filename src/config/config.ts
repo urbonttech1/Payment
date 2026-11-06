@@ -19,6 +19,18 @@ const esquema = z.object({
   /** El procesador que atiende los cobros nuevos. */
   PAYMENT_PROVIDER: z.enum(['stripe', 'square', 'adyen', 'finix', 'paypal', 'ach']).default('stripe'),
 
+  /**
+   * La comisión de la plataforma, como fracción (0.15 = 15 %).
+   *
+   * Es el valor que se aplica cuando quien llama no pasa uno. Hoy la fuente de
+   * verdad sigue siendo el panel de URBONT, que `urbont-api` lee y manda en cada
+   * reparto; esto es el respaldo, y está puesto en el 15 % porque es lo que de
+   * verdad se cobra hoy (`urbont-api/server/config/pricing.ts`), no el 10 % que
+   * publica `/api/config`. Esa contradicción es una decisión de negocio
+   * pendiente, y cuando se cierre, este es el sitio donde se fija una sola vez.
+   */
+  PLATFORM_COMMISSION_RATE: z.coerce.number().min(0).max(0.5).default(0.15),
+
   /** Secreto compartido con urbont-api para firmar las llamadas entre servicios. */
   SERVICE_SHARED_SECRET: z.string().min(16, 'SERVICE_SHARED_SECRET debe tener al menos 16 caracteres'),
 

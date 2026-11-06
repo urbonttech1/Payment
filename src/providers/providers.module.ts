@@ -9,13 +9,13 @@
 import { Global, Module } from '@nestjs/common';
 import { PAYMENT_PROVIDERS, type PaymentProvider } from './provider.port';
 import { ProviderRegistry } from './provider.registry';
-import { cargarConfig } from '../config/config';
+import { CONFIG, type Config } from '../config/config';
 import { crearStripeProvider } from './stripe/stripe.module';
 
 /** Los adaptadores que esta instalación puede usar, según sus credenciales. */
-export function montarAdaptadores(): PaymentProvider[] {
+export function montarAdaptadores(config: Config): PaymentProvider[] {
   const posibles: Array<PaymentProvider | null> = [
-    crearStripeProvider(),
+    crearStripeProvider(config),
     // crearSquareProvider(),
     // crearAdyenProvider(),
   ];
@@ -25,12 +25,12 @@ export function montarAdaptadores(): PaymentProvider[] {
 @Global()
 @Module({
   providers: [
-    { provide: PAYMENT_PROVIDERS, useFactory: montarAdaptadores },
+    { provide: PAYMENT_PROVIDERS, inject: [CONFIG], useFactory: montarAdaptadores },
     {
       provide: ProviderRegistry,
-      inject: [PAYMENT_PROVIDERS],
-      useFactory: (providers: PaymentProvider[]) =>
-        new ProviderRegistry(providers, cargarConfig().PAYMENT_PROVIDER),
+      inject: [PAYMENT_PROVIDERS, CONFIG],
+      useFactory: (providers: PaymentProvider[], config: Config) =>
+        new ProviderRegistry(providers, config.PAYMENT_PROVIDER),
     },
   ],
   exports: [ProviderRegistry, PAYMENT_PROVIDERS],

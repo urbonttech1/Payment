@@ -131,7 +131,7 @@ export class PaymentsService {
 
       const actualizada =
         autorizacion.status === 'captured'
-          ? await this.transacciones.marcarCapturada(transaccion.id, autorizacion.providerRef, autorizacion.amount)
+          ? await this.transacciones.marcarCapturada(transaccion.id, autorizacion.providerRef, autorizacion.amount, autorizacion.chargeRef)
           : await this.transacciones.marcarAutorizada(transaccion.id, autorizacion.providerRef);
 
       return { transaccion: actualizada, autorizacion };
@@ -179,7 +179,7 @@ export class PaymentsService {
       amount: amountCents === undefined ? undefined : Math.min(amountCents, autorizado),
     });
 
-    return this.transacciones.marcarCapturada(tx.id, captura.providerRef, captura.captured);
+    return this.transacciones.marcarCapturada(tx.id, captura.providerRef, captura.captured, captura.chargeRef);
   }
 
   /** Devuelve el importe autorizado que ha quedado, suba o no. */

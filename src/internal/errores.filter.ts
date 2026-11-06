@@ -26,6 +26,8 @@ import {
   EstadoInesperadoError,
   TransaccionNoEncontradaError,
 } from '../payments/payments.service';
+import { RepartoImposibleError } from '../splits/reparto';
+import { CuentaDeOtraPersonaError } from '../payees/payees.repository';
 
 interface Cuerpo {
   error: string;
@@ -58,6 +60,25 @@ export class ErroresDePagoFilter implements ExceptionFilter {
         estado: HttpStatus.CONFLICT,
         cuerpo: { error: 'UNEXPECTED_CHARGE_STATE', detalle: e.detalle },
         aviso: false,
+      };
+    }
+    // Los datos del reparto no cuadran (un impuesto mayor que el cobro, una
+    // tasa imposible): es la petición la que está mal, no el cobro.
+    if (e instanceof RepartoImposibleError) {
+      return {
+        estado: HttpStatus.BAD_REQUEST,
+        cuerpo: { error: 'INVALID_REQUEST', detalle: e.message },
+        aviso: false,
+      };
+    }
+    // La cuenta de cobro que nos pasaron es de otra persona. Hay que corregir
+    // el dato de origen, así que se dice con un código que no invita a
+    // reintentar y con el detalle suficiente para encontrarlo.
+    if (e instanceof CuentaDeOtraPersonaError) {
+      return {
+        estado: HttpStatus.CONFLICT,
+        cuerpo: { error: 'PAYEE_ACCOUNT_TAKEN', detalle: e.message },
+        aviso: true,
       };
     }
     if (e instanceof PagoRechazadoError) {

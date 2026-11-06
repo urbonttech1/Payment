@@ -401,6 +401,7 @@ export class StripeProvider implements PaymentProvider {
   // ── Interno ───────────────────────────────────────────────────────────────
 
   private aAutorizacion(pi: Stripe.PaymentIntent): Authorization {
+    const cargo = referenciaDelCargo(pi.latest_charge);
     return {
       providerRef: pi.id,
       provider: this.name,
@@ -408,6 +409,7 @@ export class StripeProvider implements PaymentProvider {
       amount: pi.amount,
       currency: moneda(pi.currency),
       ...(pi.client_secret ? { clientSecret: pi.client_secret } : {}),
+      ...(cargo ? { chargeRef: cargo } : {}),
       raw: pi,
     };
   }
