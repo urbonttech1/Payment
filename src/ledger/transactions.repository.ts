@@ -79,6 +79,15 @@ export interface TransactionsRepository {
 
   /** Guarda la referencia del procesador en cuanto se conoce. */
   marcarAutorizada(id: string, providerRef: string): Promise<Transaction>;
+
+  /**
+   * Guarda la referencia **sin cambiar el estado**: el cobro existe en el
+   * procesador pero todavía no ha ocurrido (el banco pidió autenticación).
+   *
+   * Hace falta que quede la referencia o el cobro se vuelve invisible para
+   * nosotros: ni se puede consultar, ni reintentar, ni conciliar.
+   */
+  guardarReferencia(id: string, providerRef: string): Promise<Transaction>;
   marcarCapturada(id: string, providerRef: string, capturado: Cents, chargeRef?: string | null): Promise<Transaction>;
   marcarFallida(id: string, codigo: string): Promise<Transaction>;
   marcarAnulada(id: string): Promise<Transaction>;

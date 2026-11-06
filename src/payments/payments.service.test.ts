@@ -32,6 +32,7 @@ class LibroEnMemoria implements TransactionsRepository {
       idempotencyKey: nueva.idempotencyKey,
       provider: nueva.provider,
       providerRef: null,
+      chargeRef: null,
       kind: nueva.kind,
       rideId: nueva.rideId ?? null,
       payerId: nueva.payerId ?? null,
@@ -59,8 +60,15 @@ class LibroEnMemoria implements TransactionsRepository {
   async marcarAutorizada(id: string, providerRef: string) {
     return this.set(id, { status: 'authorized', providerRef, authorizedAt: new Date() });
   }
-  async marcarCapturada(id: string, providerRef: string, capturado: number) {
-    return this.set(id, { status: 'captured', providerRef, amountCents: capturado, capturedAt: new Date() });
+  async marcarCapturada(id: string, providerRef: string, capturado: number, chargeRef?: string | null) {
+    return this.set(id, {
+      status: 'captured', providerRef, amountCents: capturado, capturedAt: new Date(),
+      ...(chargeRef ? { chargeRef } : {}),
+    });
+  }
+  /** La referencia queda, el estado no cambia: el cobro aún no ha ocurrido. */
+  async guardarReferencia(id: string, providerRef: string) {
+    return this.set(id, { providerRef });
   }
   async marcarFallida(id: string, codigo: string) {
     return this.set(id, { status: 'failed', failureCode: codigo, failedAt: new Date() });
@@ -110,12 +118,17 @@ function proveedorFalso(name: ProviderName) {
       providerRef: `${name}_ref_1`, provider: name, captured: cmd.amount ?? 11000,
       currency: 'USD' as const,
     })),
+    chargeSavedCard: vi.fn(async () => ({
+      providerRef: `${name}_ref_1`, provider: name, status: 'captured' as const,
+      amount: 11000, currency: 'USD' as const, chargeRef: `${name}_cargo_1`,
+    })),
     voidAuthorization: vi.fn(async () => undefined),
     refund: vi.fn(async () => ({
       providerRef: `${name}_ref_1`, provider: name, refunded: 11000, currency: 'USD' as const,
     })),
   } as unknown as PaymentProvider & {
     authorize: ReturnType<typeof vi.fn>;
+    chargeSavedCard: ReturnType<typeof vi.fn>;
     getAuthorization: ReturnType<typeof vi.fn>;
     increaseAuthorization: ReturnType<typeof vi.fn>;
     capture: ReturnType<typeof vi.fn>;
@@ -210,6 +223,90 @@ describe('PaymentsService · autorizar', () => {
     const soloPaypal = new PaymentsService(new ProviderRegistry([sinRetencion], 'paypal'), libro);
 
     await expect(soloPaypal.autorizar(cobro)).rejects.toThrow(/manualCapture/);
+  });
+});
+
+describe('PaymentsService · cobrar contra una tarjeta guardada', () => {
+  let libro: LibroEnMemoria;
+  let stripe: ReturnType<typeof proveedorFalso>;
+  let servicio: PaymentsService;
+
+  const propina: PeticionDeCobro = {
+    idempotencyKey: 'tip_ride-abc_authorize',
+    kind: 'tip',
+    amountCents: 1500,
+    currency: 'USD',
+    hold: false,
+    rideId: 'ride-abc',
+    payerId: 'pax-1',
+    customerRef: 'cus_1',
+    cardRef: 'pm_1',
+    description: 'URBONT tip',
+  };
+
+  beforeEach(() => {
+    libro = new LibroEnMemoria();
+    stripe = proveedorFalso('stripe');
+    servicio = new PaymentsService(new ProviderRegistry([stripe], 'stripe'), libro);
+  });
+
+  it('va por el camino de la tarjeta guardada, no por el del cobro interactivo', async () => {
+    const { transaccion } = await servicio.autorizar(propina);
+
+    expect(stripe.chargeSavedCard).toHaveBeenCalledWith(
+      expect.objectContaining({ cardRef: 'pm_1', customerRef: 'cus_1', description: 'URBONT tip' }),
+    );
+    expect(stripe.authorize).not.toHaveBeenCalled();
+    expect(transaccion.status).toBe('captured');
+  });
+
+  // El fallo que mostró a un chofer una propina de $10 que nadie pagó: crear el
+  // cobro no es cobrarlo, y el banco puede pedir autenticación sin que nadie
+  // lance un error.
+  it('UN COBRO QUE PIDE AUTENTICACIÓN NO SE DA POR COBRADO', async () => {
+    stripe.chargeSavedCard.mockResolvedValueOnce({
+      providerRef: 'pi_3ds', provider: 'stripe', status: 'requires_action',
+      amount: 1500, currency: 'USD', clientSecret: 'pi_3ds_secret',
+    });
+
+    const { transaccion, autorizacion } = await servicio.autorizar(propina);
+
+    expect(transaccion.status).toBe('pending');
+    // Pero la referencia queda: si no, el cobro sería invisible para nosotros.
+    expect(transaccion.providerRef).toBe('pi_3ds');
+    expect(autorizacion?.clientSecret).toBe('pi_3ds_secret');
+  });
+
+  it('un cobro que el procesador deja en fallido queda fallido', async () => {
+    stripe.chargeSavedCard.mockResolvedValueOnce({
+      providerRef: 'pi_no', provider: 'stripe', status: 'failed',
+      amount: 1500, currency: 'USD',
+    });
+
+    const { transaccion } = await servicio.autorizar(propina);
+
+    expect(transaccion.status).toBe('failed');
+    expect(transaccion.failureCode).toBe('provider_status_failed');
+  });
+
+  it('un reintento no vuelve a cobrar la propina', async () => {
+    await servicio.autorizar(propina);
+    await servicio.autorizar(propina);
+    expect(stripe.chargeSavedCard).toHaveBeenCalledOnce();
+  });
+
+  it('sin procesador que sepa cobrar tarjetas guardadas, no se cobra', async () => {
+    const corto = proveedorFalso('paypal');
+    (corto as unknown as { capabilities: ProviderCapabilities }).capabilities =
+      capacidades({ savedCards: false });
+    const servicio2 = new PaymentsService(new ProviderRegistry([corto], 'paypal'), libro);
+
+    await expect(servicio2.autorizar(propina)).rejects.toThrow(/savedCards/);
+  });
+
+  it('guarda el cargo, que es lo que financia el pago al chofer', async () => {
+    const { transaccion } = await servicio.autorizar(propina);
+    expect(transaccion.chargeRef).toBe('stripe_cargo_1');
   });
 });
 

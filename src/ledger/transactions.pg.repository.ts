@@ -137,6 +137,15 @@ export class PgTransactionsRepository implements TransactionsRepository {
     );
   }
 
+  async guardarReferencia(id: string, providerRef: string): Promise<Transaction> {
+    return this.actualizar(
+      `UPDATE payments.transactions
+          SET provider_ref=$2, updated_at=NOW()
+        WHERE id=$1 RETURNING ${COLUMNAS}`,
+      [id, providerRef],
+    );
+  }
+
   async marcarCapturada(
     id: string,
     providerRef: string,

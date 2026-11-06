@@ -48,6 +48,13 @@ const cuerpoDeCobro = z.object({
   taxCents: z.number().int().min(0).max(99_999_999).optional(),
   /** `true` retiene y se cobra al terminar; `false` cobra en el acto. */
   hold: z.boolean(),
+  /**
+   * `false` cuando el pasajero está delante y puede resolver una autenticación
+   * del banco. Por defecto, con tarjeta guardada, se cobra sin él.
+   */
+  offSession: z.boolean().optional(),
+  /** Lo que verá el pasajero en el extracto de su tarjeta. */
+  description: z.string().min(1).max(200).optional(),
   // uuid y no una cadena cualquiera: las columnas `ride_id` y `payer_id` del
   // libro son uuid, así que cualquier otra cosa muere en el INSERT con un 500
   // en vez de decirle a quien llama que su petición estaba mal.

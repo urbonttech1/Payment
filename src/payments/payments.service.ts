@@ -56,6 +56,10 @@ export interface PeticionDeCobro {
   taxCents?: Cents;
   /** `true` retiene (reservas); `false` cobra en el acto. */
   hold: boolean;
+  /** `false` cuando el pasajero está delante y puede autenticarse. */
+  offSession?: boolean;
+  /** Lo que verá el pasajero en el extracto de su tarjeta. */
+  description?: string;
   rideId?: string;
   payerId?: string;
   customerRef?: string;
@@ -81,7 +85,14 @@ export class PaymentsService {
    * viaje antes de pedirlo.
    */
   async autorizar(p: PeticionDeCobro): Promise<{ transaccion: Transaction; autorizacion: Authorization | null }> {
-    const provider = this.registry.paraCobroNuevo(p.hold ? ['manualCapture'] : []);
+    // Cobrar contra una tarjeta guardada es otra capacidad, y no todos los
+    // procesadores la tienen: el registro elige por operación, no sólo por
+    // procesador por defecto.
+    const conTarjetaGuardada = Boolean(p.cardRef && p.customerRef);
+    const provider = this.registry.paraCobroNuevo([
+      ...(p.hold ? (['manualCapture'] as const) : []),
+      ...(conTarjetaGuardada ? (['savedCards'] as const) : []),
+    ]);
 
     const { transaccion, yaExistia } = await this.transacciones.crearSiNoExiste({
       idempotencyKey: p.idempotencyKey,
@@ -115,30 +126,68 @@ export class PaymentsService {
       return { transaccion, autorizacion };
     }
 
+    const comando = {
+      idempotencyKey: p.idempotencyKey,
+      kind: p.kind,
+      amount: p.amountCents,
+      currency: p.currency,
+      hold: p.hold,
+      taxAmount: p.taxCents,
+      customerRef: p.customerRef,
+      cardRef: p.cardRef,
+      offSession: p.offSession,
+      description: p.description,
+      reference: { rideId: p.rideId, payerId: p.payerId },
+      metadata: p.metadata,
+    };
+
     try {
-      const autorizacion = await provider.authorize({
-        idempotencyKey: p.idempotencyKey,
-        kind: p.kind,
-        amount: p.amountCents,
-        currency: p.currency,
-        hold: p.hold,
-        taxAmount: p.taxCents,
-        customerRef: p.customerRef,
-        cardRef: p.cardRef,
-        reference: { rideId: p.rideId, payerId: p.payerId },
-        metadata: p.metadata,
-      });
+      const autorizacion = conTarjetaGuardada
+        ? await provider.chargeSavedCard({
+            ...comando,
+            cardRef: p.cardRef as string,
+            customerRef: p.customerRef as string,
+          })
+        : await provider.authorize(comando);
 
-      const actualizada =
-        autorizacion.status === 'captured'
-          ? await this.transacciones.marcarCapturada(transaccion.id, autorizacion.providerRef, autorizacion.amount, autorizacion.chargeRef)
-          : await this.transacciones.marcarAutorizada(transaccion.id, autorizacion.providerRef);
-
+      const actualizada = await this.anotarElResultado(transaccion, autorizacion);
       return { transaccion: actualizada, autorizacion };
     } catch (e) {
       const codigo = this.codigoDeError(e);
       await this.transacciones.marcarFallida(transaccion.id, codigo);
       throw e;
+    }
+  }
+
+  /**
+   * Apunta en el libro lo que de verdad pasó.
+   *
+   * **Crear un cobro no es cobrarlo.** El banco puede pedir autenticación y
+   * dejarlo en `requires_action` sin que nadie lance un error; dar eso por
+   * cobrado es lo que mostró una propina que ningún pasajero pagó. Así que el
+   * estado del libro sale del estado del procesador, uno a uno:
+   *
+   *  · `captured`        → cobrado, con su importe y su cargo.
+   *  · `authorized`      → retenido, pendiente de capturar.
+   *  · `requires_action` → **no ha pasado nada todavía**: se guarda la
+   *                        referencia y la fila sigue en `pending`. Quien llama
+   *                        recibe el `clientSecret` y decide.
+   *  · `failed`/`voided` → fallido, con lo que dijo el procesador.
+   */
+  private async anotarElResultado(tx: Transaction, a: Authorization): Promise<Transaction> {
+    switch (a.status) {
+      case 'captured':
+        return this.transacciones.marcarCapturada(tx.id, a.providerRef, a.amount, a.chargeRef);
+      case 'authorized':
+        return this.transacciones.marcarAutorizada(tx.id, a.providerRef);
+      case 'requires_action':
+        this.log.log(`${tx.idempotencyKey}: el cobro ${a.providerRef} necesita autenticación; no está cobrado.`);
+        return this.transacciones.guardarReferencia(tx.id, a.providerRef);
+      case 'failed':
+      case 'voided':
+      default:
+        this.log.warn(`${tx.idempotencyKey}: el cobro ${a.providerRef} quedó en '${a.status}'.`);
+        return this.transacciones.marcarFallida(tx.id, `provider_status_${a.status}`);
     }
   }
 

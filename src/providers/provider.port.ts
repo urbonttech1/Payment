@@ -188,6 +188,17 @@ export interface AuthorizeCommand {
   cardRef?: string;
   /** `false` cobra en el acto; `true` sólo retiene (reservas). */
   hold: boolean;
+  /**
+   * `true` (el valor por defecto cuando hay tarjeta guardada) cobra sin el
+   * pasajero delante: la propina, el cargo de limpieza, el extra por hora.
+   *
+   * `false` cuando el pasajero SÍ está delante y puede resolver una
+   * autenticación del banco en el momento. La diferencia la ve el banco y
+   * cambia qué cobros acepta.
+   */
+  offSession?: boolean;
+  /** Lo que verá el pasajero en el extracto de su tarjeta. */
+  description?: string;
   /** Impuesto ya calculado, incluido en `amount`. Se registra, no se recalcula. */
   taxAmount?: Cents;
   /** Para trazar: viaje, pasajero. Nunca para decidir importes. */
@@ -307,7 +318,19 @@ export interface PaymentProvider {
 
   saveCard(cmd: SaveCardCommand): Promise<{ clientSecret: string; customerRef: string }>;
   listCards(customerRef: string): Promise<SavedCard[]>;
-  chargeSavedCard(cmd: ChargeSavedCardCommand): Promise<Capture>;
+
+  /**
+   * Cobra contra una tarjeta ya guardada.
+   *
+   * Devuelve `Authorization` y no `Capture` por un motivo que costó dinero:
+   * **crear el cobro no es cobrarlo.** El banco puede pedir autenticación y
+   * dejarlo en `requires_action` sin que nadie lance un error. Devolviendo un
+   * `Capture` —que sólo sabe de importes— quien llama no tenía forma de
+   * distinguirlo, y daba por bueno un cobro que no había ocurrido: es
+   * literalmente lo que le mostró a un chofer una propina de $10 que ningún
+   * pasajero pagó (`urbont-api/server/services/rideTip.ts`).
+   */
+  chargeSavedCard(cmd: ChargeSavedCardCommand): Promise<Authorization>;
 
   onboardPayee(cmd: OnboardPayeeCommand): Promise<PayeeAccount>;
   payeeStatus(payeeRef: string): Promise<PayeeStatus>;

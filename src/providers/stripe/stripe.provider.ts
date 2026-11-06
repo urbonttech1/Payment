@@ -107,6 +107,11 @@ export class StripeProvider implements PaymentProvider {
           payment_method_types: ['card'],
           ...(cmd.customerRef ? { customer: cmd.customerRef } : {}),
           ...(cmd.cardRef ? { payment_method: cmd.cardRef } : {}),
+          // Con tarjeta guardada se confirma aquí mismo: nadie va a confirmarlo
+          // después, porque el pasajero no está delante. Sin tarjeta, el cobro
+          // queda esperando a que la app lo confirme con el `clientSecret`.
+          ...(cmd.cardRef ? { confirm: true, off_session: cmd.offSession ?? true } : {}),
+          ...(cmd.description ? { description: cmd.description } : {}),
           metadata: this.metadatos(cmd),
         },
         { idempotencyKey: cmd.idempotencyKey },
@@ -245,7 +250,7 @@ export class StripeProvider implements PaymentProvider {
     });
   }
 
-  async chargeSavedCard(cmd: ChargeSavedCardCommand): Promise<Capture> {
+  async chargeSavedCard(cmd: ChargeSavedCardCommand): Promise<Authorization> {
     return this.traduciendoErrores(async () => {
       const pi = await this.stripe.paymentIntents.create(
         {
@@ -253,22 +258,21 @@ export class StripeProvider implements PaymentProvider {
           currency: cmd.currency.toLowerCase(),
           customer: cmd.customerRef,
           payment_method: cmd.cardRef,
-          // El pasajero no está delante: es un cobro posterior al viaje.
-          off_session: true,
+          payment_method_types: ['card'],
+          capture_method: cmd.hold ? 'manual' : 'automatic',
           confirm: true,
+          // Por defecto el pasajero no está delante: es un cobro posterior al
+          // viaje. Con `offSession: false` sí lo está y puede autenticarse.
+          off_session: cmd.offSession ?? true,
+          ...(cmd.description ? { description: cmd.description } : {}),
           metadata: this.metadatos(cmd),
         },
         { idempotencyKey: cmd.idempotencyKey },
       );
 
-      return {
-        providerRef: pi.id,
-        provider: this.name,
-        captured: importeCapturado(pi),
-        currency: moneda(pi.currency),
-        chargeRef: referenciaDelCargo(pi.latest_charge),
-        raw: pi,
-      };
+      // Sin interpretar: el estado tal como lo devolvió Stripe. Quien llama
+      // decide qué hacer con un `requires_action`.
+      return this.aAutorizacion(pi);
     });
   }
 
