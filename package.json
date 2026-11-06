@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "nest start --watch",
-    "build": "nest build",
+    "build": "nest build && node -e \"require('fs').cpSync('db/migrations','dist/db/migrations',{recursive:true})\"",
     "start": "node dist/src/main.js",
     "migrate": "tsx db/migrate.ts",
     "typecheck": "tsc --noEmit",

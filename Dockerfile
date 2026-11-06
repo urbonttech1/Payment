@@ -33,8 +33,9 @@ RUN npm install -g pnpm@11 \
  && pnpm store prune
 
 COPY --from=builder /app/dist ./dist
-# Las migraciones son .sql: el compilador no las toca y sin ellas el servicio
-# arranca contra un esquema vacío.
+# Las migraciones son .sql: el compilador no las toca. El `build` ya las copia
+# a dist; esto lo repite a propósito, para que la imagen no dependa de ese
+# detalle del script de build.
 COPY --from=builder /app/db/migrations ./dist/db/migrations
 
 # No corre como root: si alguien logra ejecutar algo aquí, que sea sin permisos.

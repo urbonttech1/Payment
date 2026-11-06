@@ -109,7 +109,7 @@ beforeEach(() => {
   servicioFalso.porClave.mockResolvedValue(transaccion);
 });
 
-const cobro = { kind: 'ride', amountCents: 11000, taxCents: 715, currency: 'USD', hold: true, rideId: 'abc-123' };
+const cobro = { kind: 'ride', amountCents: 11000, taxCents: 715, currency: 'USD', hold: true, rideId: 'b0a1c2d3-4e5f-4a6b-8c7d-9e0f1a2b3c4d' };
 
 describe('la firma es la cerradura', () => {
   it('sin firma no se entra', async () => {
@@ -164,7 +164,7 @@ describe('autorizar', () => {
 
     expect(r.estado).toBe(200);
     expect(servicioFalso.autorizar).toHaveBeenCalledWith(
-      expect.objectContaining({ idempotencyKey: CLAVE, amountCents: 11000, hold: true, rideId: 'abc-123' }),
+      expect.objectContaining({ idempotencyKey: CLAVE, amountCents: 11000, hold: true, rideId: 'b0a1c2d3-4e5f-4a6b-8c7d-9e0f1a2b3c4d' }),
     );
     expect(r.cuerpo).toMatchObject({
       chargeKey: CLAVE,
@@ -187,6 +187,15 @@ describe('autorizar', () => {
 
   it('sin clave de idempotencia no se cobra', async () => {
     const r = await llamar('POST', '/internal/charges', { cuerpo: cobro });
+    expect(r.estado).toBe(400);
+    expect(servicioFalso.autorizar).not.toHaveBeenCalled();
+  });
+
+  it('un id de viaje que no es uuid se rechaza aquí, no en el INSERT', async () => {
+    const r = await llamar('POST', '/internal/charges', {
+      cuerpo: { ...cobro, rideId: 'humo-123' },
+      clave: CLAVE,
+    });
     expect(r.estado).toBe(400);
     expect(servicioFalso.autorizar).not.toHaveBeenCalled();
   });

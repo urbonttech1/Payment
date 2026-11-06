@@ -47,8 +47,11 @@ const cuerpoDeCobro = z.object({
   taxCents: z.number().int().min(0).max(99_999_999).optional(),
   /** `true` retiene y se cobra al terminar; `false` cobra en el acto. */
   hold: z.boolean(),
-  rideId: z.string().min(1).max(64).optional(),
-  payerId: z.string().min(1).max(64).optional(),
+  // uuid y no una cadena cualquiera: las columnas `ride_id` y `payer_id` del
+  // libro son uuid, así que cualquier otra cosa muere en el INSERT con un 500
+  // en vez de decirle a quien llama que su petición estaba mal.
+  rideId: z.string().uuid().optional(),
+  payerId: z.string().uuid().optional(),
   customerRef: z.string().min(1).max(128).optional(),
   cardRef: z.string().min(1).max(128).optional(),
   metadata: z.record(z.string().max(64), z.string().max(500)).optional(),
