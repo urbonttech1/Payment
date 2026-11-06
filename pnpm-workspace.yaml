@@ -7,3 +7,6 @@ allowBuilds:
   sharp: false
   protobufjs: false
   '@firebase/util': false
+  # Igual que sharp: binarios por plataforma como dependencias opcionales, así
+  # que el script no hace falta. Sólo lo usan las pruebas (ver vitest.config.ts).
+  '@swc/core': false

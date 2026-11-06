@@ -46,3 +46,12 @@ export function cargarConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   return r.data;
 }
+
+/**
+ * Token de inyección de la configuración.
+ *
+ * Vive aquí y no en `app.module.ts` para que lo pueda pedir cualquier módulo
+ * —el guardia de la firma, por ejemplo— sin importar el módulo raíz, que es el
+ * que los importa a todos.
+ */
+export const CONFIG = Symbol('CONFIG');

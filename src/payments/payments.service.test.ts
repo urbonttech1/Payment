@@ -80,6 +80,7 @@ class LibroEnMemoria implements TransactionsRepository {
 const capacidades = (extra: Partial<ProviderCapabilities> = {}): ProviderCapabilities => ({
   manualCapture: true,
   partialCapture: true,
+  increaseAuthorization: true,
   savedCards: true,
   payouts: true,
   splitAtCapture: false,
@@ -95,10 +96,19 @@ function proveedorFalso(name: ProviderName) {
     capabilities: capacidades(),
     authorize: vi.fn(async () => ({
       providerRef: `${name}_ref_1`, provider: name, status: 'authorized' as const,
-      amount: 11000, currency: 'USD' as const,
+      amount: 11000, currency: 'USD' as const, clientSecret: `${name}_ref_1_secret`,
     })),
-    capture: vi.fn(async () => ({
-      providerRef: `${name}_ref_1`, provider: name, captured: 11000, currency: 'USD' as const,
+    getAuthorization: vi.fn(async (ref: string) => ({
+      providerRef: ref, provider: name, status: 'authorized' as const,
+      amount: 11000, currency: 'USD' as const, clientSecret: `${ref}_secret`,
+    })),
+    increaseAuthorization: vi.fn(async (cmd: { providerRef: string; amount: number }) => ({
+      providerRef: cmd.providerRef, provider: name, status: 'authorized' as const,
+      amount: cmd.amount, currency: 'USD' as const,
+    })),
+    capture: vi.fn(async (cmd: { amount?: number }) => ({
+      providerRef: `${name}_ref_1`, provider: name, captured: cmd.amount ?? 11000,
+      currency: 'USD' as const,
     })),
     voidAuthorization: vi.fn(async () => undefined),
     refund: vi.fn(async () => ({
@@ -106,6 +116,8 @@ function proveedorFalso(name: ProviderName) {
     })),
   } as unknown as PaymentProvider & {
     authorize: ReturnType<typeof vi.fn>;
+    getAuthorization: ReturnType<typeof vi.fn>;
+    increaseAuthorization: ReturnType<typeof vi.fn>;
     capture: ReturnType<typeof vi.fn>;
     voidAuthorization: ReturnType<typeof vi.fn>;
     refund: ReturnType<typeof vi.fn>;
@@ -148,6 +160,24 @@ describe('PaymentsService · autorizar', () => {
 
     expect(stripe.authorize).toHaveBeenCalledOnce();
     expect(segunda.transaccion.id).toBe(primera.transaccion.id);
+  });
+
+  it('el reintento devuelve el clientSecret, releyendo el cobro sin volver a cobrar', async () => {
+    await servicio.autorizar(cobro);
+    const segunda = await servicio.autorizar(cobro);
+
+    expect(stripe.authorize).toHaveBeenCalledOnce();
+    expect(stripe.getAuthorization).toHaveBeenCalledWith('stripe_ref_1');
+    expect(segunda.autorizacion?.clientSecret).toBe('stripe_ref_1_secret');
+  });
+
+  it('si releer el cobro falla, el reintento devuelve la fila igual', async () => {
+    await servicio.autorizar(cobro);
+    stripe.getAuthorization.mockRejectedValueOnce(new Error('Stripe no contesta'));
+
+    const segunda = await servicio.autorizar(cobro);
+
+    expect(segunda.transaccion.providerRef).toBe('stripe_ref_1');
     expect(segunda.autorizacion).toBeNull();
   });
 
@@ -222,6 +252,55 @@ describe('PaymentsService · capturar', () => {
   it('no captura un cobro ya anulado', async () => {
     await servicio.anular(cobro.idempotencyKey);
     await expect(servicio.capturar(cobro.idempotencyKey)).rejects.toThrow(EstadoInesperadoError);
+  });
+
+  // El caso del cargo por espera: el viaje se autoriza al reservar por $110 y al
+  // terminar hay que cobrar $120. Capturar sin subir primero la autorización le
+  // regalaría la espera al pasajero, porque Stripe no captura más de lo autorizado.
+  it('sube la autorización antes de capturar un importe mayor', async () => {
+    const tx = await servicio.capturar(cobro.idempotencyKey, 12000);
+
+    expect(stripe.increaseAuthorization).toHaveBeenCalledWith(
+      expect.objectContaining({ providerRef: 'stripe_ref_1', amount: 12000 }),
+    );
+    expect(stripe.capture).toHaveBeenCalledWith(expect.objectContaining({ amount: 12000 }));
+    expect(tx.amountCents).toBe(12000);
+  });
+
+  it('la clave de subir lleva el importe, para que dos subidas no se pisen', async () => {
+    await servicio.capturar(cobro.idempotencyKey, 12000);
+    expect(stripe.increaseAuthorization).toHaveBeenCalledWith(
+      expect.objectContaining({ idempotencyKey: 'ride_abc_authorize_increase_12000' }),
+    );
+  });
+
+  it('no toca la autorización si el importe cabe en lo autorizado', async () => {
+    await servicio.capturar(cobro.idempotencyKey, 9000);
+    expect(stripe.increaseAuthorization).not.toHaveBeenCalled();
+    expect(stripe.capture).toHaveBeenCalledWith(expect.objectContaining({ amount: 9000 }));
+  });
+
+  it('si el procesador no sabe subir, captura lo autorizado y no revienta', async () => {
+    const corto = proveedorFalso('square');
+    (corto as unknown as { capabilities: ProviderCapabilities }).capabilities =
+      capacidades({ increaseAuthorization: false });
+    const servicio2 = new PaymentsService(new ProviderRegistry([corto], 'square'), libro);
+    await servicio2.autorizar({ ...cobro, idempotencyKey: 'ride_sq_authorize' });
+
+    const tx = await servicio2.capturar('ride_sq_authorize', 12000);
+
+    expect(corto.increaseAuthorization).not.toHaveBeenCalled();
+    expect(corto.capture).toHaveBeenCalledWith(expect.objectContaining({ amount: 11000 }));
+    expect(tx.amountCents).toBe(11000);
+  });
+
+  it('si el banco rechaza la subida, se captura lo autorizado', async () => {
+    stripe.increaseAuthorization.mockRejectedValueOnce(new Error('el emisor no autoriza más'));
+
+    const tx = await servicio.capturar(cobro.idempotencyKey, 12000);
+
+    expect(stripe.capture).toHaveBeenCalledWith(expect.objectContaining({ amount: 11000 }));
+    expect(tx.amountCents).toBe(11000);
   });
 });
 

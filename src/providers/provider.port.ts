@@ -36,6 +36,14 @@ export interface ProviderCapabilities {
   manualCapture: boolean;
   /** Puede capturar menos de lo autorizado (cancelaciones con penalización). */
   partialCapture: boolean;
+  /**
+   * Puede SUBIR una autorización ya hecha, antes de capturarla.
+   *
+   * Hace falta para el cargo por espera: el viaje se autoriza al reservar y el
+   * importe final sólo se sabe al terminar. Sin esto, la espera se le regala al
+   * pasajero, porque capturar nunca puede pasar del importe autorizado.
+   */
+  increaseAuthorization: boolean;
   /** Guarda tarjetas para cobrar sin el pasajero delante. */
   savedCards: boolean;
   /** Puede pagar a terceros: choferes y valets. */
@@ -176,6 +184,30 @@ export interface AuthorizeCommand {
   taxAmount?: Cents;
   /** Para trazar: viaje, pasajero. Nunca para decidir importes. */
   reference: { rideId?: string; payerId?: string };
+  /**
+   * Traza libre que el adaptador vuelca al mecanismo del procesador (metadata
+   * en Stripe, `additionalData` en Adyen, `reference_id` en Square).
+   *
+   * **Nunca decide nada aquí dentro.** Existe porque durante la convivencia
+   * `urbont-api` sigue leyendo del cobro lo que escribió al crearlo
+   * (`commission_rate`, `tax_calculation_id`…) para pagarle al chofer; si el
+   * cobro del micro no lo llevara, ese reparto cambiaría en silencio.
+   *
+   * Acotada a `LIMITE_METADATA` claves y `LIMITE_VALOR_METADATA` caracteres por
+   * valor, que es lo que aguanta el procesador más estrecho.
+   */
+  metadata?: Record<string, string>;
+}
+
+/** Lo que aceptan los procesadores en su metadata, por lo bajo. */
+export const LIMITE_METADATA = 10;
+export const LIMITE_VALOR_METADATA = 200;
+
+export interface IncreaseAuthorizationCommand {
+  idempotencyKey: string;
+  providerRef: string;
+  /** El **nuevo total** autorizado, no el incremento. */
+  amount: Cents;
 }
 
 export interface CaptureCommand {
@@ -251,6 +283,16 @@ export interface PaymentProvider {
   readonly capabilities: ProviderCapabilities;
 
   authorize(cmd: AuthorizeCommand): Promise<Authorization>;
+
+  /**
+   * Lee un cobro ya existente. **No mueve dinero.**
+   *
+   * Hace falta para devolver el `clientSecret` cuando quien llama repite la
+   * petición de cobro: la clave de idempotencia devuelve la misma fila del
+   * libro, pero el secreto con el que la app confirma la tarjeta vive en el
+   * procesador, no en el libro.
+   */
+  getAuthorization(providerRef: string): Promise<Authorization>;
   capture(cmd: CaptureCommand): Promise<Capture>;
   voidAuthorization(cmd: VoidCommand): Promise<void>;
   refund(cmd: RefundCommand): Promise<Refund>;
@@ -263,11 +305,45 @@ export interface PaymentProvider {
   payeeStatus(payeeRef: string): Promise<PayeeStatus>;
   transfer(cmd: TransferCommand): Promise<Transfer>;
 
+  /** Sólo con `capabilities.increaseAuthorization`. */
+  increaseAuthorization?(cmd: IncreaseAuthorizationCommand): Promise<Authorization>;
+
   /** Sólo con `capabilities.tapToPay`. */
   presentCharge?(cmd: PresentChargeCommand): Promise<Authorization>;
 
   /** Verifica la firma y traduce. Debe lanzar si la firma no cuadra. */
   parseWebhook(req: WebhookRequest): Promise<ProviderEvent[]>;
+}
+
+// ── Errores del dominio ─────────────────────────────────────────────────────
+//
+// Los adaptadores traducen a esto los errores de su procesador. Si no lo
+// hicieran, quien llama tendría que reconocer un `StripeCardError` para saber
+// que la tarjeta fue rechazada, y añadir Square obligaría a reconocer también
+// los suyos: exactamente lo que este contrato existe para evitar.
+
+/** La tarjeta (o el banco) dijo no. Reintentar no ayuda. */
+export class PagoRechazadoError extends Error {
+  constructor(
+    public readonly codigo: string,
+    mensaje: string,
+    public readonly provider: ProviderName,
+  ) {
+    super(mensaje);
+    this.name = 'PagoRechazadoError';
+  }
+}
+
+/** El procesador falló o no contestó. Reintentar puede ayudar. */
+export class ProcesadorFalloError extends Error {
+  constructor(
+    public readonly provider: ProviderName,
+    mensaje: string,
+    public readonly causa?: unknown,
+  ) {
+    super(mensaje);
+    this.name = 'ProcesadorFalloError';
+  }
 }
 
 /** Token de inyección: los adaptadores se registran contra esto, no contra una clase. */

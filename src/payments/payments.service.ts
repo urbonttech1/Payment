@@ -6,7 +6,8 @@
  *  1. **Un reintento no cobra dos veces.** Antes de llamar al procesador se
  *     apunta la intención en el libro, con la clave de idempotencia como
  *     restricción única. Si la fila ya existía y ya tenía referencia del
- *     procesador, se devuelve aquélla y no se llama a nadie.
+ *     procesador, se devuelve aquélla; del procesador sólo se vuelve a *leer*,
+ *     nunca a cobrar.
  *  2. **Una operación sobre un cobro existente vuelve al procesador que lo
  *     originó.** No al que esté por defecto hoy: al que guarda esa fila.
  *
@@ -28,6 +29,7 @@ import type {
   Cents,
   ChargeKind,
   Currency,
+  PaymentProvider,
   Refund,
 } from '../providers/provider.port';
 
@@ -58,6 +60,8 @@ export interface PeticionDeCobro {
   payerId?: string;
   customerRef?: string;
   cardRef?: string;
+  /** Traza que viaja al procesador y no decide nada. Ver `AuthorizeCommand`. */
+  metadata?: Record<string, string>;
 }
 
 @Injectable()
@@ -90,11 +94,25 @@ export class PaymentsService {
       currency: p.currency,
     });
 
-    // Un reintento de algo que ya se cobró: se devuelve lo que hay y no se
-    // vuelve a llamar al procesador.
+    // Un reintento de algo que ya se cobró: se devuelve lo que hay y **no se
+    // vuelve a cobrar**. Sí se relee el cobro en el procesador, que es una
+    // lectura y no mueve dinero: el `clientSecret` con el que la app confirma la
+    // tarjeta vive allí y no en el libro, así que sin releerlo el reintento
+    // devolvería un cobro sin secreto y el pasajero se quedaría mirando una
+    // pantalla que no avanza. Si la lectura falla, se devuelve el cobro igual.
     if (yaExistia && transaccion.providerRef) {
       this.log.log(`Reintento de ${p.idempotencyKey}: ya existe ${transaccion.providerRef}, no se cobra otra vez.`);
-      return { transaccion, autorizacion: null };
+      let autorizacion: Authorization | null = null;
+      try {
+        autorizacion = await this.registry
+          .paraCobroExistente(transaccion.provider)
+          .getAuthorization(transaccion.providerRef);
+      } catch (e) {
+        this.log.warn(
+          `No se pudo releer ${transaccion.providerRef} en '${transaccion.provider}': ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+      return { transaccion, autorizacion };
     }
 
     try {
@@ -108,6 +126,7 @@ export class PaymentsService {
         customerRef: p.customerRef,
         cardRef: p.cardRef,
         reference: { rideId: p.rideId, payerId: p.payerId },
+        metadata: p.metadata,
       });
 
       const actualizada =
@@ -143,13 +162,55 @@ export class PaymentsService {
     }
 
     const provider = this.registry.paraCobroExistente(tx.provider);
+
+    // Capturar nunca puede pasar del importe autorizado. Cuando el total final
+    // es mayor —el cargo por espera del viaje, que sólo se sabe al terminar—
+    // hay que subir primero la autorización. Si el procesador no sabe o el
+    // banco se niega, se captura lo que había: cobrar de menos es un problema,
+    // pero reventar la captura deja el viaje sin cobrar, que es peor.
+    let autorizado = tx.amountCents;
+    if (amountCents !== undefined && amountCents > autorizado) {
+      autorizado = await this.subirAutorizacion(provider, tx, amountCents);
+    }
+
     const captura: Capture = await provider.capture({
       idempotencyKey: `${idempotencyKey}_capture`,
       providerRef: tx.providerRef,
-      amount: amountCents,
+      amount: amountCents === undefined ? undefined : Math.min(amountCents, autorizado),
     });
 
     return this.transacciones.marcarCapturada(tx.id, captura.providerRef, captura.captured);
+  }
+
+  /** Devuelve el importe autorizado que ha quedado, suba o no. */
+  private async subirAutorizacion(
+    provider: PaymentProvider,
+    tx: Transaction,
+    nuevoTotal: Cents,
+  ): Promise<Cents> {
+    if (!provider.capabilities.increaseAuthorization || !provider.increaseAuthorization) {
+      this.log.warn(
+        `'${provider.name}' no sabe subir una autorización: ${tx.id} se captura por ${tx.amountCents} y no por ${nuevoTotal}.`,
+      );
+      return tx.amountCents;
+    }
+    try {
+      const subida = await provider.increaseAuthorization({
+        // El importe entra en la clave: subir a 12000 y subir a 13000 son dos
+        // operaciones distintas, y reusar la clave con otro importe lo rechaza
+        // el propio procesador.
+        idempotencyKey: `${tx.idempotencyKey}_increase_${nuevoTotal}`,
+        providerRef: tx.providerRef!,
+        amount: nuevoTotal,
+      });
+      this.log.log(`Autorización ${tx.providerRef} subida de ${tx.amountCents} a ${subida.amount}.`);
+      return subida.amount;
+    } catch (e) {
+      this.log.error(
+        `No se pudo subir la autorización ${tx.providerRef} a ${nuevoTotal}; se captura ${tx.amountCents}: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      return tx.amountCents;
+    }
   }
 
   /** Suelta una retención que nunca llegó a cobrarse. */
@@ -200,6 +261,11 @@ export class PaymentsService {
     const transaccion = total ? await this.transacciones.marcarReembolsada(tx.id) : tx;
 
     return { transaccion, reembolso };
+  }
+
+  /** La transacción con esa clave, o `null`. Es lo que consulta `urbont-api`. */
+  async porClave(clave: string): Promise<Transaction | null> {
+    return this.transacciones.porClaveDeIdempotencia(clave);
   }
 
   private async exigirPorClave(clave: string): Promise<Transaction> {

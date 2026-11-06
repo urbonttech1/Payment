@@ -24,7 +24,14 @@ import {
 /** Una capacidad concreta que una operación necesita del procesador. */
 export type CapabilityNeeded = keyof Pick<
   ProviderCapabilities,
-  'manualCapture' | 'partialCapture' | 'savedCards' | 'payouts' | 'splitAtCapture' | 'tapToPay' | 'bankDebit'
+  | 'manualCapture'
+  | 'partialCapture'
+  | 'increaseAuthorization'
+  | 'savedCards'
+  | 'payouts'
+  | 'splitAtCapture'
+  | 'tapToPay'
+  | 'bankDebit'
 >;
 
 export class ProviderNotAvailableError extends Error {
