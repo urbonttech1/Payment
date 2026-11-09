@@ -73,6 +73,21 @@ procesador cambia algo, firmado con el mismo canon. Lo que viaja es un evento de
 **URBONT** (`payment.captured`, `refund.succeeded`, `chargeback.opened`), no uno
 de Stripe: añadir Square no toca ni una línea de `urbont-api`.
 
+## Añadir un procesador
+
+Un procesador es un módulo que implementa `PaymentProvider`. Para que eso sea
+verdad y no una aspiración, hay una **suite de conformidad**
+(`src/providers/conformidad.ts`) que todo adaptador tiene que pasar: se
+implementa el arnés con el transporte falso que se quiera y se llama a
+`pruebasDeConformidad`. El de Stripe es el ejemplo a copiar
+(`src/providers/stripe/stripe.conformidad.test.ts`).
+
+Lo que comprueba no es teórico. Cada regla está ahí porque su incumplimiento ya
+costó dinero en este proyecto: que el cobro no lleve el reparto dentro, que todo
+lo que mueve dinero lleve clave de idempotencia, y que una retención no vuelva
+como cobrada. Y la propia suite tiene pruebas (`conformidad.test.ts`), porque
+una que pase siempre da una confianza falsa.
+
 ## Las dos reglas que gobiernan el diseño
 
 1. **Una operación sobre un cobro existente va siempre al procesador que lo
