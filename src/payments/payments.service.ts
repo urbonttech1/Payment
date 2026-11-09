@@ -23,6 +23,8 @@ import {
   type Transaction,
   type TransactionsRepository,
 } from '../ledger/transactions.repository';
+import { ENTRIES_REPOSITORY, type EntriesRepository } from '../ledger/entries.repository';
+import { asientosDeReembolso } from '../ledger/asientos';
 import type {
   Authorization,
   Capture,
@@ -75,6 +77,7 @@ export class PaymentsService {
   constructor(
     private readonly registry: ProviderRegistry,
     @Inject(TRANSACTIONS_REPOSITORY) private readonly transacciones: TransactionsRepository,
+    @Inject(ENTRIES_REPOSITORY) private readonly asientos: EntriesRepository,
   ) {}
 
   /**
@@ -305,6 +308,21 @@ export class PaymentsService {
       amount: opciones.amountCents,
       reason: opciones.reason,
     });
+
+    // El asiento se apunta aquí y no se espera al webhook: si los webhooks no
+    // estuvieran configurados, el libro no se enteraría nunca de una
+    // devolución que sí ocurrió. Y cuando el aviso llegue —que llegará— no lo
+    // apuntará dos veces, porque la clave sale de la misma referencia.
+    await this.asientos.asentar(
+      asientosDeReembolso({
+        transactionId: tx.id,
+        refundRef: reembolso.providerRef,
+        devueltoCents: reembolso.refunded,
+        currency: tx.currency,
+        provider: tx.provider,
+        memo: opciones.reason ? `reembolso (${opciones.reason})` : undefined,
+      }),
+    );
 
     const total = opciones.amountCents === undefined || opciones.amountCents >= tx.amountCents;
     const transaccion = total ? await this.transacciones.marcarReembolsada(tx.id) : tx;

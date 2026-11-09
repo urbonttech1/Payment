@@ -40,12 +40,14 @@ import type {
   RefundCommand,
   SaveCardCommand,
   SavedCard,
+  SettlementCharge,
   Transfer,
   TransferCommand,
   VoidCommand,
   WebhookRequest,
 } from '../provider.port';
 import {
+  FirmaDeWebhookInvalidaError,
   LIMITE_METADATA,
   LIMITE_VALOR_METADATA,
   PagoRechazadoError,
@@ -60,9 +62,10 @@ import {
   traducirEvento,
 } from './stripe.mapper';
 
-export class FirmaInvalidaError extends Error {
+/** El caso de Stripe del error del contrato. El nombre se queda por claridad. */
+export class FirmaInvalidaError extends FirmaDeWebhookInvalidaError {
   constructor(detalle: string) {
-    super(`La firma del webhook de Stripe no es válida: ${detalle}`);
+    super('stripe', detalle);
     this.name = 'FirmaInvalidaError';
   }
 }
@@ -365,6 +368,36 @@ export class StripeProvider implements PaymentProvider {
     );
 
     return this.aAutorizacion(pi);
+  }
+
+  // ── Conciliación ──────────────────────────────────────────────────────────
+
+  /**
+   * Los cargos de Stripe en un período.
+   *
+   * Sólo los que de verdad entraron (`status: 'succeeded'`): un cargo fallido
+   * no es dinero y compararlo contra nuestro libro inventaría descuadres. Lo
+   * devuelto se resta aquí, que es donde se sabe.
+   */
+  async listCharges(desde: Date, hasta: Date, limite: number): Promise<SettlementCharge[]> {
+    return this.traduciendoErrores(async () => {
+      const cargos = await this.stripe.charges
+        .list({
+          created: { gte: Math.floor(desde.getTime() / 1000), lte: Math.ceil(hasta.getTime() / 1000) },
+          limit: 100,
+        })
+        .autoPagingToArray({ limit: limite });
+
+      return cargos
+        .filter((c) => c.status === 'succeeded')
+        .map((c) => ({
+          chargeRef: c.id,
+          providerRef: typeof c.payment_intent === 'string' ? c.payment_intent : (c.payment_intent?.id ?? null),
+          netCents: (c.amount_captured ?? c.amount) - (c.amount_refunded ?? 0),
+          currency: moneda(c.currency),
+          createdAt: new Date(c.created * 1000),
+        }));
+    });
   }
 
   // ── Webhooks ──────────────────────────────────────────────────────────────

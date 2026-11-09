@@ -15,6 +15,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { CONFIG, type Config } from '../config/config';
 import { POOL } from '../db/pool';
 import { InternalModule } from './internal.module';
+import { LedgerModule } from '../ledger/ledger.module';
 import { PaymentsService, EstadoInesperadoError, TransaccionNoEncontradaError } from '../payments/payments.service';
 import { SplitsService } from '../splits/splits.service';
 import { PagoRechazadoError, ProcesadorFalloError } from '../providers/provider.port';
@@ -104,7 +105,12 @@ async function llamar(
 }
 
 beforeAll(async () => {
-  const mod = await Test.createTestingModule({ imports: [ConfigDePrueba, InternalModule] })
+  const mod = await Test.createTestingModule({
+    // `LedgerModule` entra porque el grafo real lo tiene: es @Global y lo monta
+    // el módulo raíz. Sin él, los servicios que piden el libro no se pueden
+    // construir, y lo que se estaría probando sería otro grafo.
+    imports: [ConfigDePrueba, LedgerModule, InternalModule],
+  })
     .overrideProvider(PaymentsService)
     .useValue(servicioFalso)
     .overrideProvider(SplitsService)

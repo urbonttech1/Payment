@@ -62,6 +62,15 @@ export interface PayeesRepository {
 
   porPersona(payeeId: string, provider: ProviderName): Promise<Payee | null>;
 
+  /**
+   * Por su cuenta en el procesador.
+   *
+   * Hace falta para los avisos del procesador: cuando Stripe dice que una
+   * cuenta cambió, habla de `acct_…` y no sabe nada de nuestros
+   * identificadores.
+   */
+  porReferencia(provider: ProviderName, providerRef: string): Promise<Payee | null>;
+
   /** Cambio explícito de cuenta. No lo hace el camino del pago. */
   actualizarCuenta(payeeId: string, provider: ProviderName, providerRef: string): Promise<Payee>;
 

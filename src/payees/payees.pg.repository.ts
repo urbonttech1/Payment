@@ -81,6 +81,14 @@ export class PgPayeesRepository implements PayeesRepository {
     return rows[0] ? aPayee(rows[0]) : null;
   }
 
+  async porReferencia(provider: ProviderName, providerRef: string): Promise<Payee | null> {
+    const { rows } = await this.pool.query<Fila>(
+      `SELECT ${COLUMNAS} FROM payments.payees WHERE provider = $1 AND provider_ref = $2`,
+      [provider, providerRef],
+    );
+    return rows[0] ? aPayee(rows[0]) : null;
+  }
+
   async actualizarCuenta(payeeId: string, provider: ProviderName, providerRef: string): Promise<Payee> {
     // La cuenta cambia y el estado vuelve a 'pending': la cuenta nueva no
     // hereda el «activa» de la vieja, que es de otra cuenta.

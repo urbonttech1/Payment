@@ -7,6 +7,8 @@ import { ProvidersModule } from './providers/providers.module';
 import { LedgerModule } from './ledger/ledger.module';
 import { PaymentsModule } from './payments/payments.module';
 import { SplitsModule } from './splits/splits.module';
+import { WebhooksModule } from './webhooks/webhooks.module';
+import { ReconciliationModule } from './reconciliation/reconciliation.module';
 import { InternalModule } from './internal/internal.module';
 
 export { CONFIG };
@@ -28,6 +30,8 @@ export { CONFIG };
     LedgerModule,
     PaymentsModule,
     SplitsModule,
+    WebhooksModule,
+    ReconciliationModule,
     InternalModule,
   ],
   providers: [

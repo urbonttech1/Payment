@@ -36,8 +36,8 @@ src/
   internal/    Lo que llama urbont-api, firmado                ← fase 3
   splits/      Reparto: chofer, valet, plataforma              ← fase 4
   payees/      La cuenta de cobro de cada persona, por procesador ← fase 4
-  webhooks/    Un endpoint por procesador, firma e idempotencia ← fase 6
-  reconciliation/ Cuadre diario contra el extracto             ← fase 6
+  webhooks/    Avisos del procesador: firma, idempotencia y aviso a urbont-api ← fase 6
+  reconciliation/ Cuadre contra el extracto del procesador     ← fase 6
 db/migrations/ Esquema `payments`, aplicado al arrancar
 ```
 
@@ -55,10 +55,23 @@ Nada de esto lo llama la app: sólo `urbont-api`, y firmado (ver
 | `POST /internal/charges/:clave/refund` | Devuelve dinero ya cobrado. |
 | `POST /internal/charges/:clave/settle` | Reparte lo capturado entre chofer, valet y URBONT. Con `dryRun`, sólo calcula. |
 | `GET /internal/charges/:clave/splits` | El reparto, tal como esté. |
+| `POST /internal/webhooks/retry` | Reintenta los avisos del procesador que quedaron pendientes. |
+| `POST /internal/reconciliation/run` | Cuadra un período contra el extracto del procesador. |
+| `POST /webhooks/:provider` | Los avisos del procesador. **Sin firma de URBONT**: lo que autentica aquí es la firma del procesador, que comprueba su adaptador contra el cuerpo crudo. |
 | `GET /healthz`, `GET /readyz` | Sondas. Sin firma. |
 
 El importe nunca viaja en el cuerpo de `settle`: sale de lo que el libro dice
 que se capturó.
+
+Las dos tareas de `/internal` las dispara el cron de `urbont-api` y no un reloj
+propio: el servicio corre con dos tareas en ECS, y un `setInterval` dentro haría
+el cuadre dos veces.
+
+En la otra dirección, el servicio llama a
+`POST <URBONT_API_URL>/api/internal/payments/events` cuando un aviso del
+procesador cambia algo, firmado con el mismo canon. Lo que viaja es un evento de
+**URBONT** (`payment.captured`, `refund.succeeded`, `chargeback.opened`), no uno
+de Stripe: añadir Square no toca ni una línea de `urbont-api`.
 
 ## Las dos reglas que gobiernan el diseño
 

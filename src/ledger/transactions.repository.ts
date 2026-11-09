@@ -77,6 +77,20 @@ export interface TransactionsRepository {
   porClaveDeIdempotencia(clave: string): Promise<Transaction | null>;
   porReferenciaDelProveedor(provider: ProviderName, providerRef: string): Promise<Transaction | null>;
 
+  /**
+   * Lo capturado en un período, con lo devuelto ya restado, para cuadrar.
+   *
+   * El neto sale del libro y no de la columna: `amount_cents` guarda lo
+   * capturado, y los reembolsos son asientos. Restarlos aquí es lo que hace que
+   * el cuadre compare peras con peras.
+   */
+  capturadasEntre(
+    provider: ProviderName,
+    desde: Date,
+    hasta: Date,
+    limite: number,
+  ): Promise<Array<{ chargeKey: string; chargeRef: string | null; providerRef: string | null; netoCents: Cents }>>;
+
   /** Guarda la referencia del procesador en cuanto se conoce. */
   marcarAutorizada(id: string, providerRef: string): Promise<Transaction>;
 

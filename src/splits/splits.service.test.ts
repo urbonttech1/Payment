@@ -109,6 +109,9 @@ class BeneficiariosEnMemoria implements PayeesRepository {
   async porPersona(payeeId: string, provider: ProviderName): Promise<Payee | null> {
     return this.filas.find((f) => f.payeeId === payeeId && f.provider === provider) ?? null;
   }
+  async porReferencia(provider: ProviderName, providerRef: string): Promise<Payee | null> {
+    return this.filas.find((f) => f.provider === provider && f.providerRef === providerRef) ?? null;
+  }
   async actualizarCuenta(payeeId: string, provider: ProviderName, providerRef: string): Promise<Payee> {
     return this.set(payeeId, provider, { providerRef, status: 'pending' });
   }

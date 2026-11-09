@@ -164,6 +164,16 @@ export type ProviderEventType =
 export interface ProviderEvent {
   /** El id del evento EN EL PROVEEDOR. Es la clave de la idempotencia. */
   eventId: string;
+  /**
+   * El id del objeto que disparó el evento: el reembolso, la disputa, la
+   * transferencia.
+   *
+   * No es lo mismo que `providerRef`, que es siempre el cobro. Hace falta
+   * porque un reembolso llega por dos caminos —lo pedimos nosotros y el
+   * procesador nos lo cuenta— y los asientos tienen que ser los mismos: la
+   * identidad del asiento es esta referencia, que los dos caminos conocen.
+   */
+  objectRef?: string;
   provider: ProviderName;
   type: ProviderEventType;
   providerRef: string | null;
@@ -285,6 +295,21 @@ export interface PresentChargeCommand extends AuthorizeCommand {
   terminalRef?: string;
 }
 
+/**
+ * Una línea del extracto del procesador.
+ *
+ * `netCents` es lo que de verdad quedó: lo capturado menos lo devuelto. Es el
+ * único número con el que se puede cuadrar, porque es el que el procesador
+ * acabará ingresando.
+ */
+export interface SettlementCharge {
+  chargeRef: string;
+  providerRef: string | null;
+  netCents: Cents;
+  currency: Currency;
+  createdAt: Date;
+}
+
 export interface WebhookRequest {
   /** El cuerpo CRUDO. Si se parsea antes, la firma no se puede verificar. */
   raw: Buffer;
@@ -344,6 +369,15 @@ export interface PaymentProvider {
 
   /** Verifica la firma y traduce. Debe lanzar si la firma no cuadra. */
   parseWebhook(req: WebhookRequest): Promise<ProviderEvent[]>;
+
+  /**
+   * El extracto del procesador en un período, para cuadrar.
+   *
+   * Es una lectura y puede ser larga: quien llama pone un tope. Un cuadre que
+   * se trae un año entero bloquea el servicio, y un cuadre que no se hace es un
+   * descuadre que crece sin que nadie lo vea.
+   */
+  listCharges(desde: Date, hasta: Date, limite: number): Promise<SettlementCharge[]>;
 }
 
 // ── Errores del dominio ─────────────────────────────────────────────────────
@@ -362,6 +396,23 @@ export class PagoRechazadoError extends Error {
   ) {
     super(mensaje);
     this.name = 'PagoRechazadoError';
+  }
+}
+
+/**
+ * La firma de un aviso del procesador no cuadra.
+ *
+ * Vive en el contrato y no en cada adaptador porque quien decide qué responder
+ * —un 400 que el procesador no reintenta— no puede estar reconociendo el error
+ * concreto de Stripe: con Square tendría que reconocer el suyo.
+ */
+export class FirmaDeWebhookInvalidaError extends Error {
+  constructor(
+    public readonly provider: ProviderName,
+    detalle: string,
+  ) {
+    super(`La firma del webhook de ${provider} no es válida: ${detalle}`);
+    this.name = 'FirmaDeWebhookInvalidaError';
   }
 }
 

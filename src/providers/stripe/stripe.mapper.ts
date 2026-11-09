@@ -103,8 +103,26 @@ interface ObjetoDeEvento {
   id?: string;
   amount?: number;
   amount_received?: number;
+  /** Sólo en un Charge: cuánto se ha devuelto de él en total. */
+  amount_refunded?: number;
   currency?: string;
   payment_intent?: string | { id?: string } | null;
+}
+
+/**
+ * El importe que de verdad dice el evento.
+ *
+ * En un reembolso hay que tener cuidado: `charge.refunded` trae un Charge, y su
+ * `amount` es el importe del COBRO, no el de la devolución. Leerlo sin mirar
+ * convertiría un reembolso parcial de $5 en uno de $117, y el libro diría que
+ * se devolvió el viaje entero.
+ *
+ * `refund.created` y `refund.updated` traen un Refund, cuyo `amount` sí es el
+ * devuelto; por eso el orden es `amount_refunded` primero y `amount` después.
+ */
+function importeDelEvento(tipo: ProviderEventType, o: ObjetoDeEvento): number | undefined {
+  if (tipo === 'refund.succeeded') return o.amount_refunded ?? o.amount;
+  return o.amount_received ?? o.amount;
 }
 
 /**
@@ -129,7 +147,8 @@ export function traducirEvento(evento: Stripe.Event): ProviderEvent | null {
     type: tipo,
     // Para un payment_intent.*, el propio objeto es el cobro.
     providerRef: referenciaCobro ?? objeto.id ?? null,
-    amount: objeto.amount_received ?? objeto.amount,
+    ...(objeto.id ? { objectRef: objeto.id } : {}),
+    amount: importeDelEvento(tipo, objeto),
     currency: objeto.currency ? moneda(objeto.currency) : undefined,
     occurredAt: new Date(evento.created * 1000),
     raw: evento,

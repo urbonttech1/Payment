@@ -128,6 +128,41 @@ export class PgTransactionsRepository implements TransactionsRepository {
     return rows[0] ? aTransaccion(rows[0]) : null;
   }
 
+  async capturadasEntre(
+    provider: ProviderName,
+    desde: Date,
+    hasta: Date,
+    limite: number,
+  ): Promise<Array<{ chargeKey: string; chargeRef: string | null; providerRef: string | null; netoCents: Cents }>> {
+    const { rows } = await this.pool.query<{
+      chargeKey: string; chargeRef: string | null; providerRef: string | null; neto: string;
+    }>(
+      `SELECT t.idempotency_key AS "chargeKey",
+              t.charge_ref      AS "chargeRef",
+              t.provider_ref    AS "providerRef",
+              (t.amount_cents + COALESCE((
+                 SELECT SUM(e.amount_cents)
+                   FROM payments.ledger_entries e
+                  WHERE e.transaction_id = t.id
+                    AND e.entry_type = 'refund'
+                    AND e.account = 'clearing'
+               ), 0))::bigint AS neto
+         FROM payments.transactions t
+        WHERE t.provider = $1
+          AND t.status IN ('captured','refunded')
+          AND t.captured_at >= $2 AND t.captured_at <= $3
+        ORDER BY t.captured_at ASC
+        LIMIT $4`,
+      [provider, desde, hasta, limite],
+    );
+    return rows.map((r) => ({
+      chargeKey: r.chargeKey,
+      chargeRef: r.chargeRef,
+      providerRef: r.providerRef,
+      netoCents: Number(r.neto),
+    }));
+  }
+
   async marcarAutorizada(id: string, providerRef: string): Promise<Transaction> {
     return this.actualizar(
       `UPDATE payments.transactions

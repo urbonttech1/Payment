@@ -85,6 +85,27 @@ class LibroEnMemoria implements TransactionsRepository {
   }
 }
 
+/** Los asientos, con el índice único de `entry_key` imitado. */
+class AsientosEnMemoria {
+  porClave = new Map<string, { account: string; amountCents: number }>();
+  async asentar(as: Array<{ entryKey: string; account: string; amountCents: number }>) {
+    let n = 0;
+    for (const a of as) {
+      if (this.porClave.has(a.entryKey)) continue;
+      this.porClave.set(a.entryKey, { account: a.account, amountCents: a.amountCents });
+      n++;
+    }
+    return n;
+  }
+  async porTransaccion() { return []; }
+  async saldos() {
+    const s: Record<string, number> = {};
+    for (const a of this.porClave.values()) s[a.account] = (s[a.account] ?? 0) + a.amountCents;
+    return s;
+  }
+  total() { return [...this.porClave.values()].reduce((t, a) => t + a.amountCents, 0); }
+}
+
 const capacidades = (extra: Partial<ProviderCapabilities> = {}): ProviderCapabilities => ({
   manualCapture: true,
   partialCapture: true,
@@ -123,8 +144,10 @@ function proveedorFalso(name: ProviderName) {
       amount: 11000, currency: 'USD' as const, chargeRef: `${name}_cargo_1`,
     })),
     voidAuthorization: vi.fn(async () => undefined),
-    refund: vi.fn(async () => ({
-      providerRef: `${name}_ref_1`, provider: name, refunded: 11000, currency: 'USD' as const,
+    // Devuelve lo que se le pidió, como hace un procesador de verdad: el libro
+    // apunta lo que el procesador dice que devolvió, no lo que se le pidió.
+    refund: vi.fn(async (cmd: { amount?: number }) => ({
+      providerRef: `${name}_ref_1`, provider: name, refunded: cmd.amount ?? 11000, currency: 'USD' as const,
     })),
   } as unknown as PaymentProvider & {
     authorize: ReturnType<typeof vi.fn>;
@@ -151,11 +174,13 @@ describe('PaymentsService · autorizar', () => {
   let libro: LibroEnMemoria;
   let stripe: ReturnType<typeof proveedorFalso>;
   let servicio: PaymentsService;
+  let asientos: AsientosEnMemoria;
 
   beforeEach(() => {
     libro = new LibroEnMemoria();
     stripe = proveedorFalso('stripe');
-    servicio = new PaymentsService(new ProviderRegistry([stripe], 'stripe'), libro);
+    asientos = new AsientosEnMemoria();
+    servicio = new PaymentsService(new ProviderRegistry([stripe], 'stripe'), libro, asientos as never);
   });
 
   it('apunta la intención en el libro y cobra', async () => {
@@ -220,7 +245,7 @@ describe('PaymentsService · autorizar', () => {
   it('una retención exige un procesador que sepa retener', async () => {
     const sinRetencion = proveedorFalso('paypal');
     (sinRetencion as { capabilities: ProviderCapabilities }).capabilities = capacidades({ manualCapture: false });
-    const soloPaypal = new PaymentsService(new ProviderRegistry([sinRetencion], 'paypal'), libro);
+    const soloPaypal = new PaymentsService(new ProviderRegistry([sinRetencion], 'paypal'), libro, new AsientosEnMemoria() as never);
 
     await expect(soloPaypal.autorizar(cobro)).rejects.toThrow(/manualCapture/);
   });
@@ -230,6 +255,7 @@ describe('PaymentsService · cobrar contra una tarjeta guardada', () => {
   let libro: LibroEnMemoria;
   let stripe: ReturnType<typeof proveedorFalso>;
   let servicio: PaymentsService;
+  let asientos: AsientosEnMemoria;
 
   const propina: PeticionDeCobro = {
     idempotencyKey: 'tip_ride-abc_authorize',
@@ -247,7 +273,8 @@ describe('PaymentsService · cobrar contra una tarjeta guardada', () => {
   beforeEach(() => {
     libro = new LibroEnMemoria();
     stripe = proveedorFalso('stripe');
-    servicio = new PaymentsService(new ProviderRegistry([stripe], 'stripe'), libro);
+    asientos = new AsientosEnMemoria();
+    servicio = new PaymentsService(new ProviderRegistry([stripe], 'stripe'), libro, asientos as never);
   });
 
   it('va por el camino de la tarjeta guardada, no por el del cobro interactivo', async () => {
@@ -299,7 +326,7 @@ describe('PaymentsService · cobrar contra una tarjeta guardada', () => {
     const corto = proveedorFalso('paypal');
     (corto as unknown as { capabilities: ProviderCapabilities }).capabilities =
       capacidades({ savedCards: false });
-    const servicio2 = new PaymentsService(new ProviderRegistry([corto], 'paypal'), libro);
+    const servicio2 = new PaymentsService(new ProviderRegistry([corto], 'paypal'), libro, new AsientosEnMemoria() as never);
 
     await expect(servicio2.autorizar(propina)).rejects.toThrow(/savedCards/);
   });
@@ -314,11 +341,13 @@ describe('PaymentsService · capturar', () => {
   let libro: LibroEnMemoria;
   let stripe: ReturnType<typeof proveedorFalso>;
   let servicio: PaymentsService;
+  let asientos: AsientosEnMemoria;
 
   beforeEach(async () => {
     libro = new LibroEnMemoria();
     stripe = proveedorFalso('stripe');
-    servicio = new PaymentsService(new ProviderRegistry([stripe], 'stripe'), libro);
+    asientos = new AsientosEnMemoria();
+    servicio = new PaymentsService(new ProviderRegistry([stripe], 'stripe'), libro, asientos as never);
     await servicio.autorizar(cobro);
   });
 
@@ -381,7 +410,7 @@ describe('PaymentsService · capturar', () => {
     const corto = proveedorFalso('square');
     (corto as unknown as { capabilities: ProviderCapabilities }).capabilities =
       capacidades({ increaseAuthorization: false });
-    const servicio2 = new PaymentsService(new ProviderRegistry([corto], 'square'), libro);
+    const servicio2 = new PaymentsService(new ProviderRegistry([corto], 'square'), libro, new AsientosEnMemoria() as never);
     await servicio2.autorizar({ ...cobro, idempotencyKey: 'ride_sq_authorize' });
 
     const tx = await servicio2.capturar('ride_sq_authorize', 12000);
@@ -408,12 +437,12 @@ describe('PaymentsService · la regla del procesador originario', () => {
     const adyen = proveedorFalso('adyen');
 
     // El cobro se hizo cuando Stripe era el procesador por defecto.
-    const conStripe = new PaymentsService(new ProviderRegistry([stripe, adyen], 'stripe'), libro);
+    const conStripe = new PaymentsService(new ProviderRegistry([stripe, adyen], 'stripe'), libro, new AsientosEnMemoria() as never);
     await conStripe.autorizar(cobro);
     await conStripe.capturar(cobro.idempotencyKey);
 
     // Meses después, el por defecto es Adyen y hay que devolver el dinero.
-    const conAdyen = new PaymentsService(new ProviderRegistry([stripe, adyen], 'adyen'), libro);
+    const conAdyen = new PaymentsService(new ProviderRegistry([stripe, adyen], 'adyen'), libro, new AsientosEnMemoria() as never);
     const { reembolso } = await conAdyen.reembolsar(cobro.idempotencyKey);
 
     expect(stripe.refund).toHaveBeenCalledOnce();
@@ -425,7 +454,7 @@ describe('PaymentsService · la regla del procesador originario', () => {
     const libro = new LibroEnMemoria();
     const stripe = proveedorFalso('stripe');
     const adyen = proveedorFalso('adyen');
-    const servicio = new PaymentsService(new ProviderRegistry([stripe, adyen], 'adyen'), libro);
+    const servicio = new PaymentsService(new ProviderRegistry([stripe, adyen], 'adyen'), libro, new AsientosEnMemoria() as never);
 
     await servicio.autorizar(cobro);
 
@@ -436,7 +465,7 @@ describe('PaymentsService · la regla del procesador originario', () => {
   it('si el procesador de aquel cobro ya no está montado, se dice claro', async () => {
     const libro = new LibroEnMemoria();
     const stripe = proveedorFalso('stripe');
-    const conStripe = new PaymentsService(new ProviderRegistry([stripe], 'stripe'), libro);
+    const conStripe = new PaymentsService(new ProviderRegistry([stripe], 'stripe'), libro, new AsientosEnMemoria() as never);
     await conStripe.autorizar(cobro);
     await conStripe.capturar(cobro.idempotencyKey);
 
@@ -449,11 +478,13 @@ describe('PaymentsService · reembolsar', () => {
   let libro: LibroEnMemoria;
   let stripe: ReturnType<typeof proveedorFalso>;
   let servicio: PaymentsService;
+  let asientos: AsientosEnMemoria;
 
   beforeEach(async () => {
     libro = new LibroEnMemoria();
     stripe = proveedorFalso('stripe');
-    servicio = new PaymentsService(new ProviderRegistry([stripe], 'stripe'), libro);
+    asientos = new AsientosEnMemoria();
+    servicio = new PaymentsService(new ProviderRegistry([stripe], 'stripe'), libro, asientos as never);
     await servicio.autorizar(cobro);
   });
 
@@ -465,6 +496,24 @@ describe('PaymentsService · reembolsar', () => {
     await servicio.capturar(cobro.idempotencyKey);
     const { transaccion } = await servicio.reembolsar(cobro.idempotencyKey);
     expect(transaccion.status).toBe('refunded');
+  });
+
+  // Si el libro no se enterara hasta el webhook, una instalación sin webhooks
+  // configurados devolvería dinero sin que quedara rastro.
+  it('el libro se entera aquí mismo, sin esperar al aviso del procesador', async () => {
+    await servicio.capturar(cobro.idempotencyKey);
+    await servicio.reembolsar(cobro.idempotencyKey, { amountCents: 5500 });
+
+    const saldos = await asientos.saldos();
+    expect(saldos.clearing).toBe(-5500);
+    expect(saldos.platform_revenue).toBe(5500);
+    expect(asientos.total()).toBe(0);
+  });
+
+  it('y la clave del asiento sale de la referencia del reembolso', async () => {
+    await servicio.capturar(cobro.idempotencyKey);
+    await servicio.reembolsar(cobro.idempotencyKey, { amountCents: 5500 });
+    expect([...asientos.porClave.keys()].some((k) => k.includes(':refund:stripe_ref_1:'))).toBe(true);
   });
 
   it('un reembolso parcial deja el cobro como capturado', async () => {
