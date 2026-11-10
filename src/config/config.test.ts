@@ -12,6 +12,12 @@ describe('cargarConfig', () => {
     expect(c.PORT).toBe(8080);
     expect(c.PAYMENT_PROVIDER).toBe('stripe');
     expect(c.NODE_ENV).toBe('development');
+    expect(c.PAYMENTS_PUBLIC_URL).toBe('https://payments.urbont.com');
+  });
+
+  it('una dirección pública vacía cuenta como la de producción', () => {
+    const c = cargarConfig({ ...minimo, PAYMENTS_PUBLIC_URL: '' } as NodeJS.ProcessEnv);
+    expect(c.PAYMENTS_PUBLIC_URL).toBe('https://payments.urbont.com');
   });
 
   it('no arranca sin base de datos', () => {

@@ -48,6 +48,19 @@ const esquema = z.object({
   /** A dónde avisa el servicio cuando un cobro cambia de estado. */
   URBONT_API_URL: z.string().url().optional(),
 
+  /**
+   * La dirección pública de este servicio, sin barra al final.
+   *
+   * Con ella se arma el enlace de webhooks de cada pasarela
+   * (`https://payments.urbont.com/webhooks/stripe`). El panel lo enseña para
+   * pegarlo en el procesador. Vacío —ECS inyecta `""` si no está puesta—
+   * cuenta como la dirección de producción.
+   */
+  PAYMENTS_PUBLIC_URL: z.preprocess(
+    (v) => (v === '' || v === undefined ? 'https://payments.urbont.com' : String(v).replace(/\/$/, '')),
+    z.string().url(),
+  ),
+
   // ── Credenciales de los procesadores ──────────────────────────────────────
   //
   // Opcionales a propósito: un adaptador sin credenciales no se monta, y el

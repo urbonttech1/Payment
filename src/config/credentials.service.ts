@@ -29,6 +29,7 @@ import { crearStripeProvider } from '../providers/stripe/stripe.module';
 import { crearSquareProvider } from '../providers/square/square.module';
 import type { PaymentProvider, ProviderName } from '../providers/provider.port';
 import { cifrar, claveMaestra, descifrar, hayClaveMaestra, pista } from './cifrado';
+import { enlacesDeWebhook, urlDeWebhook, type EnlaceWebhook } from './enlacesWebhook';
 
 /** Qué campos pide cada pasarela. El panel dibuja el formulario con esto. */
 export interface CampoDeCredencial {
@@ -43,8 +44,8 @@ export interface CampoDeCredencial {
 export const CAMPOS: Record<string, CampoDeCredencial[]> = {
   stripe: [
     { nombre: 'secretKey', etiqueta: 'Clave secreta', requerido: true, secreto: true, ayuda: 'Empieza por sk_live_ o sk_test_' },
-    { nombre: 'webhookSecret', etiqueta: 'Secreto del webhook', requerido: false, secreto: true, ayuda: 'whsec_… del endpoint de la cuenta' },
-    { nombre: 'webhookSecretConnect', etiqueta: 'Secreto del webhook de Connect', requerido: false, secreto: true, ayuda: 'El de las cuentas de los choferes' },
+    { nombre: 'webhookSecret', etiqueta: 'Secreto del webhook', requerido: false, secreto: true, ayuda: 'whsec_… del endpoint de la cuenta. La URL que hay que pegar en Stripe está arriba.' },
+    { nombre: 'webhookSecretConnect', etiqueta: 'Secreto del webhook de Connect', requerido: false, secreto: true, ayuda: 'El del endpoint de las cuentas de los choferes. Usa la misma URL, el otro secreto.' },
     { nombre: 'terminalLocationId', etiqueta: 'Location de Tap to Pay', requerido: false, secreto: false, ayuda: 'tml_… sin esto el lector solo funciona simulado' },
   ],
   // Square pide DOS cosas, no una: sin localización rechaza cada cobro. Por eso
@@ -53,8 +54,7 @@ export const CAMPOS: Record<string, CampoDeCredencial[]> = {
     { nombre: 'accessToken', etiqueta: 'Token de acceso', requerido: true, secreto: true, ayuda: 'EAAA… del panel de Square; el de sandbox solo cobra en pruebas' },
     { nombre: 'locationId', etiqueta: 'Localización que cobra', requerido: true, secreto: false, ayuda: 'L… la location del vendedor' },
     { nombre: 'environment', etiqueta: 'Entorno', requerido: false, secreto: false, ayuda: 'sandbox o production; vacío = production' },
-    { nombre: 'webhookSignatureKey', etiqueta: 'Clave de firma del webhook', requerido: false, secreto: true, ayuda: 'La del endpoint, en el panel de Square' },
-    { nombre: 'webhookNotificationUrl', etiqueta: 'URL de entrega del webhook', requerido: false, secreto: false, ayuda: 'La URL EXACTA del panel de Square: Square firma incluyéndola, y un carácter de diferencia hace que ninguna firma cuadre' },
+    { nombre: 'webhookSignatureKey', etiqueta: 'Clave de firma del webhook', requerido: false, secreto: true, ayuda: 'La del endpoint, en el panel de Square. La URL que hay que pegar está arriba: no se escribe, Square firma esa exactamente.' },
   ],
 };
 
@@ -72,6 +72,8 @@ export interface CredencialParaElPanel {
   /** `entorno` si manda una variable de entorno; `panel` si manda esta tabla. */
   origen: 'entorno' | 'panel' | 'ninguno';
   campos: CampoDeCredencial[];
+  /** Los enlaces que hay que pegar en el panel de esa pasarela. */
+  webhooks: EnlaceWebhook[];
 }
 
 export class CredencialInvalidaError extends Error {
@@ -133,6 +135,7 @@ export class CredentialsService implements OnModuleInit {
         montado: montados.has(provider),
         origen,
         campos: CAMPOS[nombre],
+        webhooks: enlacesDeWebhook(this.config.PAYMENTS_PUBLIC_URL, nombre, this.urlVerificada(provider)),
       };
     });
   }
@@ -157,7 +160,7 @@ export class CredentialsService implements OnModuleInit {
       }
     }
 
-    const adaptador = this.construir(provider, valores);
+    const adaptador = this.construir(provider, this.conUrlDeWebhook(provider, valores));
     if (!adaptador) throw new SinSoporteError(provider);
 
     try {
@@ -178,7 +181,7 @@ export class CredentialsService implements OnModuleInit {
          pista = EXCLUDED.pista,
          estado = 'ok', ultimo_error = NULL,
          comprobada_en = NOW(), updated_by = EXCLUDED.updated_by, updated_at = NOW()`,
-      [provider, cifrar(JSON.stringify(valores), clave), pista(valores[principal] ?? ''), quien.slice(0, 200)],
+      [provider, cifrar(JSON.stringify(this.conUrlDeWebhook(provider, valores)), clave), pista(valores[principal] ?? ''), quien.slice(0, 200)],
     );
 
     // Montarlo sólo si el entorno no manda: lo desplegado gana.
@@ -246,6 +249,23 @@ export class CredentialsService implements OnModuleInit {
     }
   }
 
+  /**
+   * La URL con la que ese procesador firma. Square puede traer una fija en el
+   * entorno; el resto sale de la dirección pública del servicio.
+   */
+  private urlVerificada(provider: string): string {
+    if (provider === 'square' && this.config.SQUARE_WEBHOOK_NOTIFICATION_URL) {
+      return this.config.SQUARE_WEBHOOK_NOTIFICATION_URL;
+    }
+    return urlDeWebhook(this.config.PAYMENTS_PUBLIC_URL, provider);
+  }
+
+  /** Deja en el JSON guardado la URL que de verdad se comprueba. */
+  private conUrlDeWebhook(provider: ProviderName, valores: Record<string, string>): Record<string, string> {
+    if (provider !== 'square') return valores;
+    return { ...valores, webhookNotificationUrl: this.urlVerificada('square') };
+  }
+
   /** El adaptador de ese procesador con esos valores, o `null` si no hay. */
   private construir(provider: ProviderName, valores: Record<string, string>): PaymentProvider | null {
     if (provider === 'stripe') {
@@ -263,7 +283,9 @@ export class CredentialsService implements OnModuleInit {
         SQUARE_LOCATION_ID: valores.locationId,
         SQUARE_ENVIRONMENT: valores.environment === 'sandbox' ? 'sandbox' : 'production',
         SQUARE_WEBHOOK_SIGNATURE_KEY: valores.webhookSignatureKey || undefined,
-        SQUARE_WEBHOOK_NOTIFICATION_URL: valores.webhookNotificationUrl || undefined,
+        // La que se enseña en el panel. Square firma incluyéndola, así que no
+        // se deja que quien pega la credencial escriba otra.
+        SQUARE_WEBHOOK_NOTIFICATION_URL: this.urlVerificada('square'),
       });
     }
     // Adyen, Finix, PayPal…: cuando exista su adaptador, se añade aquí y en

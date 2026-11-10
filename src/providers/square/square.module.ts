@@ -13,6 +13,7 @@
 import { Module } from '@nestjs/common';
 import { SquareClient, SquareEnvironment } from 'square';
 import { CONFIG, type Config } from '../../config/config';
+import { urlDeWebhook } from '../../config/enlacesWebhook';
 import { SquareProvider } from './square.provider';
 
 export const SQUARE_PROVIDER = Symbol('SQUARE_PROVIDER');
@@ -52,7 +53,16 @@ export function crearSquareProvider(config: ConfigDeSquare): SquareProvider | nu
 }
 
 @Module({
-  providers: [{ provide: SQUARE_PROVIDER, inject: [CONFIG], useFactory: crearSquareProvider }],
+  providers: [{
+    provide: SQUARE_PROVIDER,
+    inject: [CONFIG],
+    useFactory: (config: Config) => crearSquareProvider({
+      ...config,
+      // Si el entorno no fijó la URL, se comprueba la misma que enseña el panel.
+      SQUARE_WEBHOOK_NOTIFICATION_URL:
+        config.SQUARE_WEBHOOK_NOTIFICATION_URL ?? urlDeWebhook(config.PAYMENTS_PUBLIC_URL, 'square'),
+    }),
+  }],
   exports: [SQUARE_PROVIDER],
 })
 export class SquareModule {}
