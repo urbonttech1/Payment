@@ -14,6 +14,7 @@ import { AppModule } from './app.module';
 import { cargarConfig } from './config/config';
 import { POOL } from './db/pool';
 import { aplicarMigraciones } from '../db/migrate';
+import { VERSION } from './version';
 
 async function arrancar() {
   const config = cargarConfig();
@@ -32,7 +33,9 @@ async function arrancar() {
 
   app.enableShutdownHooks();
   await app.listen(config.PORT, '0.0.0.0');
-  log.log(`URBONT PAYMENTS escuchando en :${config.PORT} · procesador por defecto: ${config.PAYMENT_PROVIDER}`);
+  log.log(
+    `URBONT PAYMENTS v${VERSION} escuchando en :${config.PORT} · procesador por defecto: ${config.PAYMENT_PROVIDER}`,
+  );
 }
 
 arrancar().catch((e) => {

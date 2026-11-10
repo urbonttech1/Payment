@@ -9,6 +9,7 @@
 import { Controller, Get, Inject, HttpException, HttpStatus } from '@nestjs/common';
 import type { Pool } from 'pg';
 import { POOL } from '../db/pool';
+import { SERVICIO, VERSION } from '../version';
 
 @Controller()
 export class HealthController {
@@ -48,6 +49,8 @@ export class HealthController {
       throw new HttpException(
         {
           status: 'degradado',
+          service: SERVICIO,
+          version: VERSION,
           checks: { db: 'caída' },
           detalle: (e instanceof Error ? e.message : String(e)) || 'sin detalle del controlador',
         },
@@ -56,7 +59,10 @@ export class HealthController {
     }
     return {
       status: 'ok',
-      service: 'urbont-payments',
+      service: SERVICIO,
+      // Qué versión está sirviendo de verdad. Es la respuesta a «¿se desplegó
+      // lo último?» sin tener que mirar qué imagen corre en ECS.
+      version: VERSION,
       checks: { db: 'ok' },
       uptimeSec: Math.round((Date.now() - this.arrancadoEn) / 1000),
       latencyMs: Date.now() - inicio,
@@ -66,6 +72,6 @@ export class HealthController {
 
   @Get('readyz')
   readyz() {
-    return { status: 'ok', ts: new Date().toISOString() };
+    return { status: 'ok', version: VERSION, ts: new Date().toISOString() };
   }
 }

@@ -63,7 +63,7 @@ Nada de esto lo llama la app: sólo `urbont-api`, y firmado (ver
 | `POST /internal/webhooks/retry` | Reintenta los avisos del procesador que quedaron pendientes. |
 | `POST /internal/reconciliation/run` | Cuadra un período contra el extracto del procesador. |
 | `POST /webhooks/:provider` | Los avisos del procesador. **Sin firma de URBONT**: lo que autentica aquí es la firma del procesador, que comprueba su adaptador contra el cuerpo crudo. |
-| `GET /healthz`, `GET /readyz` | Sondas. Sin firma. |
+| `GET /healthz`, `GET /readyz` | Sondas. Sin firma. Las dos dicen la **versión** que está sirviendo. |
 
 El importe nunca viaja en el cuerpo de `settle`: sale de lo que el libro dice
 que se capturó.
@@ -133,6 +133,28 @@ pegan en el panel (URBONT PAYMENTS → Configuración), se prueban contra el
 procesador antes de guardarse y se guardan cifradas. Lo único que hay que
 escribir en el servicio es su lista de campos (`CAMPOS` en
 `src/config/credentials.service.ts`) y el panel dibuja el formulario solo.
+
+## La versión
+
+Manda `src/version.ts`, una constante en el código. No se lee de
+`npm_package_version` porque en producción el proceso lo arranca ECS con `node
+dist/src/main.js`, no npm, y esa variable llegaría vacía justo donde se
+consulta. `package.json` la copia, y una prueba falla si se separan.
+
+Se ve en `/healthz`, en `/readyz`, en la línea del arranque y en el panel de
+Stripe junto a cada cobro que este servicio crea. Con eso, «¿está desplegado lo
+último?» se responde con un `curl`:
+
+```bash
+curl -s https://payments.urbont.com/healthz
+# {"status":"ok","service":"urbont-payments","version":"1.0.0","checks":{"db":"ok"},…}
+```
+
+Se sube el tercer número cuando el cambio no se nota desde fuera; el segundo
+cuando el servicio hace algo nuevo (otra pasarela, otro flujo, otra ruta); el
+primero cuando algo que ya usaba alguien deja de funcionar igual: una ruta de
+`/internal` que cambia de forma, el canon de la firma, o el contrato de los
+adaptadores.
 
 ## Las dos reglas que gobiernan el diseño
 

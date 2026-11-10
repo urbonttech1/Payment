@@ -10,6 +10,7 @@ import { Module } from '@nestjs/common';
 import Stripe from 'stripe';
 import { CONFIG, type Config } from '../../config/config';
 import { StripeProvider } from './stripe.provider';
+import { VERSION } from '../../version';
 
 export const STRIPE_PROVIDER = Symbol('STRIPE_PROVIDER');
 
@@ -31,7 +32,8 @@ export function crearStripeProvider(config: Pick<Config,
     // respuestas, y es un desajuste que sólo se nota en producción.
     maxNetworkRetries: 2,
     timeout: 20_000,
-    appInfo: { name: 'URBONT PAYMENTS', version: '0.1.0' },
+    // Stripe lo enseña junto a cada cobro: desde qué versión se creó.
+    appInfo: { name: 'URBONT PAYMENTS', version: VERSION },
   });
 
   const secretos = [config.STRIPE_WEBHOOK_SECRET, config.STRIPE_WEBHOOK_SECRET_CONNECT]
