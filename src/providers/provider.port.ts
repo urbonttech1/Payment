@@ -401,6 +401,16 @@ export interface PaymentProvider {
    */
   terminalSession?(): Promise<TerminalSession>;
 
+  /**
+   * Comprueba que las credenciales valen, sin mover dinero.
+   *
+   * Una lectura barata y autenticada: si el procesador contesta, la clave es
+   * buena. Existe para poder **probar antes de guardar** una credencial que
+   * llega del panel; guardar una rota dejaría el servicio sin cobrar y a quien
+   * la pegó sin enterarse hasta el primer viaje.
+   */
+  ping(): Promise<void>;
+
   /** Verifica la firma y traduce. Debe lanzar si la firma no cuadra. */
   parseWebhook(req: WebhookRequest): Promise<ProviderEvent[]>;
 

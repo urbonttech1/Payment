@@ -44,6 +44,17 @@ export interface WebhookEventsRepository {
   /** Los que se guardaron y no se llegaron a procesar, los más viejos primero. */
   pendientes(limite: number): Promise<AvisoGuardado[]>;
 
+  /**
+   * Los últimos avisos, para poder mirarlos desde el panel.
+   *
+   * Hasta ahora se guardaban y no había forma de verlos: un aviso que falló tres
+   * veces era invisible salvo que alguien leyera los registros del servicio.
+   */
+  recientes(limite: number, estado?: EstadoDeAviso): Promise<AvisoGuardado[]>;
+
+  /** Cuántos hay de cada estado. Es el resumen que el panel pone arriba. */
+  resumenPorEstado(): Promise<Record<string, number>>;
+
   marcarProcesado(id: string): Promise<AvisoGuardado>;
   /** Para un tipo que conocemos pero que no mueve nada en URBONT. */
   marcarIgnorado(id: string, motivo: string): Promise<AvisoGuardado>;

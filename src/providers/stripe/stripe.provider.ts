@@ -401,6 +401,19 @@ export class StripeProvider implements PaymentProvider {
     });
   }
 
+  /**
+   * Una lectura barata y autenticada.
+   *
+   * `balance.retrieve` no mueve nada, no cuesta y falla en seco si la clave no
+   * vale, que es justo lo que hace falta para probar una credencial antes de
+   * guardarla.
+   */
+  async ping(): Promise<void> {
+    return this.traduciendoErrores(async () => {
+      await this.stripe.balance.retrieve();
+    });
+  }
+
   // ── Conciliación ──────────────────────────────────────────────────────────
 
   /**

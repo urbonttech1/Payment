@@ -11,9 +11,15 @@
  * libro, y eso no lo hace cualquiera.
  */
 
-import { BadRequestException, Body, Controller, Get, HttpCode, Post, UseFilters, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, Param, Post, Query, UseFilters, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { SettingsService, esProcesador, type RuteoGuardado } from '../config/settings.service';
+import {
+  CredentialsService,
+  CredencialInvalidaError,
+  SinSoporteError,
+  type CredencialParaElPanel,
+} from '../config/credentials.service';
 import { WebhooksService, type ResultadoDeAviso } from '../webhooks/webhooks.service';
 import { ReconciliationService } from '../reconciliation/reconciliation.service';
 import type { ResultadoDelCuadre } from '../reconciliation/cuadre';
@@ -27,6 +33,11 @@ const cuerpoDeReintento = z.object({
 const cuerpoDeRuteo = z.object({
   defaultProvider: z.string().min(2).max(20),
   /** Quién lo cambió. Lo pone urbont-api desde su sesión de admin. */
+  updatedBy: z.string().min(1).max(200),
+});
+
+const cuerpoDeCredenciales = z.object({
+  valores: z.record(z.string().max(64), z.string().max(500)),
   updatedBy: z.string().min(1).max(200),
 });
 
@@ -44,7 +55,57 @@ export class OperacionesController {
     private readonly webhooks: WebhooksService,
     private readonly conciliacion: ReconciliationService,
     private readonly settings: SettingsService,
+    private readonly credenciales: CredentialsService,
   ) {}
+
+  /**
+   * Las pasarelas y el estado de sus credenciales.
+   *
+   * **Sin un solo secreto dentro**: los últimos cuatro caracteres, quién la
+   * puso y si vale. Una API que devuelve la clave secreta convierte cualquier
+   * fallo de permisos del panel en una fuga de la caja.
+   */
+  @Get('credentials')
+  async credencialesVigentes(): Promise<{ pasarelas: CredencialParaElPanel[]; cifradoDisponible: boolean }> {
+    return {
+      pasarelas: await this.credenciales.listar(),
+      cifradoDisponible: this.credenciales.cifradoDisponible,
+    };
+  }
+
+  /**
+   * Guarda las credenciales de una pasarela, **después** de probarlas.
+   *
+   * Si no valen, no se guarda nada y se dice por qué: el servicio se queda con
+   * lo que tenía, que al menos cobra.
+   */
+  @Post('credentials/:provider')
+  @HttpCode(200)
+  async guardarCredenciales(
+    @Param('provider') provider: string,
+    @Body() body: unknown,
+  ): Promise<{ pasarelas: CredencialParaElPanel[]; cifradoDisponible: boolean }> {
+    const datos = cuerpoDeCredenciales.safeParse(body ?? {});
+    if (!datos.success || !esProcesador(provider)) {
+      throw new BadRequestException({ error: 'INVALID_REQUEST', detalle: 'faltan los valores o el procesador no existe' });
+    }
+    await this.credenciales.guardar(provider, datos.data.valores, datos.data.updatedBy);
+    return this.credencialesVigentes();
+  }
+
+  @Post('credentials/:provider/delete')
+  @HttpCode(200)
+  async borrarCredenciales(
+    @Param('provider') provider: string,
+    @Body() body: unknown,
+  ): Promise<{ pasarelas: CredencialParaElPanel[]; cifradoDisponible: boolean }> {
+    const datos = cuerpoDeCredenciales.partial({ valores: true }).safeParse(body ?? {});
+    if (!datos.success || !esProcesador(provider)) {
+      throw new BadRequestException({ error: 'INVALID_REQUEST', detalle: 'procesador desconocido' });
+    }
+    await this.credenciales.borrar(provider, datos.data.updatedBy ?? 'admin');
+    return this.credencialesVigentes();
+  }
 
   /**
    * Qué procesador atiende los cobros nuevos, y cuáles podría atenderlos.
@@ -79,6 +140,17 @@ export class OperacionesController {
       datos.data.updatedBy,
     );
     return { ...guardado, disponibles: this.settings.disponibles() };
+  }
+
+  /** Los últimos avisos del procesador, para mirarlos desde el panel. */
+  @Get('webhooks')
+  async avisos(@Query('limite') limite?: string, @Query('estado') estado?: string) {
+    const n = Number(limite);
+    const valido = ['received', 'processed', 'ignored', 'failed'];
+    return this.webhooks.listar(
+      Number.isFinite(n) && n > 0 ? n : 50,
+      estado && valido.includes(estado) ? (estado as 'received') : undefined,
+    );
   }
 
   /**

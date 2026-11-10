@@ -38,6 +38,7 @@ import type { ProviderEvent, ProviderName, WebhookRequest } from '../providers/p
 import {
   WEBHOOK_EVENTS_REPOSITORY,
   type AvisoGuardado,
+  type EstadoDeAviso,
   type WebhookEventsRepository,
 } from './webhook-events.repository';
 import { UrbontApiClient, type EventoParaUrbont } from './urbont-api.client';
@@ -133,6 +134,29 @@ export class WebhooksService {
       this.log.log(`Reintento de avisos: ${JSON.stringify(total)}`);
     }
     return total;
+  }
+
+  /**
+   * Los últimos avisos y el recuento por estado, para el panel.
+   *
+   * El `payload` no se devuelve: son cientos de líneas de JSON del procesador
+   * por evento, y lo que alguien necesita ver es qué pasó y si falló.
+   */
+  async listar(limite = 50, estado?: EstadoDeAviso): Promise<{
+    avisos: Array<Omit<AvisoGuardado, 'payload'>>;
+    resumen: Record<string, number>;
+  }> {
+    const [avisos, resumen] = await Promise.all([
+      this.avisos.recientes(Math.min(200, Math.max(1, limite)), estado),
+      this.avisos.resumenPorEstado(),
+    ]);
+    return {
+      avisos: avisos.map(({ payload, ...resto }) => {
+        void payload;
+        return resto;
+      }),
+      resumen,
+    };
   }
 
   private async procesarConCuidado(

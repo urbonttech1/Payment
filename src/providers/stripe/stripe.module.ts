@@ -20,7 +20,9 @@ export const STRIPE_PROVIDER = Symbol('STRIPE_PROVIDER');
  * el grafo de módulos no depende del entorno del proceso, y se puede levantar
  * el servicio en una prueba sin inventarle un entorno completo.
  */
-export function crearStripeProvider(config: Config): StripeProvider | null {
+export function crearStripeProvider(config: Pick<Config,
+  'STRIPE_SECRET_KEY' | 'STRIPE_WEBHOOK_SECRET' | 'STRIPE_WEBHOOK_SECRET_CONNECT' | 'STRIPE_TERMINAL_LOCATION_ID'
+>): StripeProvider | null {
   if (!config.STRIPE_SECRET_KEY) return null;
 
   const stripe = new Stripe(config.STRIPE_SECRET_KEY, {

@@ -28,6 +28,7 @@ import {
 } from '../payments/payments.service';
 import { RepartoImposibleError } from '../splits/reparto';
 import { CuentaDeOtraPersonaError } from '../payees/payees.repository';
+import { CredencialInvalidaError, SinSoporteError } from '../config/credentials.service';
 
 interface Cuerpo {
   error: string;
@@ -79,6 +80,22 @@ export class ErroresDePagoFilter implements ExceptionFilter {
         estado: HttpStatus.CONFLICT,
         cuerpo: { error: 'PAYEE_ACCOUNT_TAKEN', detalle: e.message },
         aviso: true,
+      };
+    }
+    // La credencial que pegaron no vale. Es un 422 y no un 500: no hay nada
+    // roto, hay que corregir lo que se escribió.
+    if (e instanceof CredencialInvalidaError) {
+      return {
+        estado: HttpStatus.UNPROCESSABLE_ENTITY,
+        cuerpo: { error: 'INVALID_CREDENTIALS', detalle: e.message },
+        aviso: false,
+      };
+    }
+    if (e instanceof SinSoporteError) {
+      return {
+        estado: HttpStatus.NOT_IMPLEMENTED,
+        cuerpo: { error: 'PROVIDER_NOT_SUPPORTED', detalle: e.message },
+        aviso: false,
       };
     }
     if (e instanceof PagoRechazadoError) {

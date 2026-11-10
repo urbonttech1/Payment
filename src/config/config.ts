@@ -31,6 +31,17 @@ const esquema = z.object({
    */
   PLATFORM_COMMISSION_RATE: z.coerce.number().min(0).max(0.5).default(0.15),
 
+  /**
+   * La clave maestra con la que se cifran las credenciales de las pasarelas
+   * (`payments.provider_credentials`). 32 bytes en hex o base64.
+   *
+   * Sin ella, las pasarelas salen sólo de las variables de entorno y el panel
+   * no puede guardar ninguna: es lo que mantiene la caja fuera de la base.
+   *
+   *   openssl rand -hex 32
+   */
+  CREDENTIALS_KEY: z.string().optional(),
+
   /** Secreto compartido con urbont-api para firmar las llamadas entre servicios. */
   SERVICE_SHARED_SECRET: z.string().min(16, 'SERVICE_SHARED_SECRET debe tener al menos 16 caracteres'),
 

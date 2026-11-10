@@ -39,6 +39,7 @@ function stripeFalso(fallo?: Error) {
     paymentMethods: { list: registra({ data: [] }), retrieve: registra({ id: 'pm_1' }) },
     charges: { list: vi.fn(() => ({ autoPagingToArray: async () => [] })) },
     terminal: { connectionTokens: { create: registra({ secret: 'pst_test_1' }) } },
+    balance: { retrieve: registra({ object: 'balance' }) },
     webhooks: {
       constructEvent: vi.fn(() => {
         throw new Error('firma inválida');

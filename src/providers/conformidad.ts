@@ -269,6 +269,22 @@ export function pruebasDeConformidad(arnes: ArnesDeConformidad): void {
       });
     });
 
+    describe('probar las credenciales', () => {
+      // Sin esto no se puede comprobar una credencial antes de guardarla, y
+      // guardar una rota deja el servicio sin cobrar sin que nadie se entere
+      // hasta el primer viaje.
+      it('UN ADAPTADOR SABE DECIR SI SUS CREDENCIALES VALEN', async () => {
+        const p = arnes.montar();
+        expect(typeof p.ping).toBe('function');
+        await expect(p.ping()).resolves.toBeUndefined();
+      });
+
+      it('y con credenciales malas, falla', async () => {
+        const p = arnes.montarConFalloDelProcesador();
+        await expect(p.ping()).rejects.toThrow();
+      });
+    });
+
     describe('los avisos del procesador', () => {
       it('una firma que no cuadra se rechaza, nunca se cree a medias', async () => {
         const p = arnes.montar();

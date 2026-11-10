@@ -99,6 +99,24 @@ export class PgWebhookEventsRepository implements WebhookEventsRepository {
     return rows.map(aAviso);
   }
 
+  async recientes(limite: number, estado?: EstadoDeAviso): Promise<AvisoGuardado[]> {
+    const { rows } = await this.pool.query<Fila>(
+      `SELECT ${COLUMNAS} FROM payments.webhook_events
+        WHERE ($2::text IS NULL OR status = $2)
+        ORDER BY created_at DESC
+        LIMIT $1`,
+      [limite, estado ?? null],
+    );
+    return rows.map(aAviso);
+  }
+
+  async resumenPorEstado(): Promise<Record<string, number>> {
+    const { rows } = await this.pool.query<{ status: string; n: number }>(
+      `SELECT status, COUNT(*)::int AS n FROM payments.webhook_events GROUP BY status`,
+    );
+    return Object.fromEntries(rows.map((r) => [r.status, Number(r.n)]));
+  }
+
   async marcarProcesado(id: string): Promise<AvisoGuardado> {
     return this.actualizar(
       `UPDATE payments.webhook_events

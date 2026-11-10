@@ -94,6 +94,19 @@ export class ProviderRegistry {
     this.log.warn(`Los cobros NUEVOS pasan de '${antes}' a '${nombre}'. Los existentes siguen en el suyo.`);
   }
 
+  /**
+   * Monta (o reemplaza) un procesador en caliente.
+   *
+   * Es lo que permite pegar las credenciales de una pasarela en el panel y que
+   * cobre acto seguido, sin redesplegar. Reemplazar es a propósito: cambiar una
+   * clave caducada por la nueva es exactamente eso.
+   */
+  montar(provider: PaymentProvider): void {
+    const reemplaza = this.porNombre.has(provider.name);
+    this.porNombre.set(provider.name, provider);
+    this.log.log(`Procesador '${provider.name}' ${reemplaza ? 'reemplazado' : 'montado'} en caliente.`);
+  }
+
   /** Los que están montados ahora mismo. */
   disponibles(): ProviderName[] {
     return [...this.porNombre.keys()];
