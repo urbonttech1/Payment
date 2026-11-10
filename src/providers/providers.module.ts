@@ -11,12 +11,13 @@ import { PAYMENT_PROVIDERS, type PaymentProvider } from './provider.port';
 import { ProviderRegistry } from './provider.registry';
 import { CONFIG, type Config } from '../config/config';
 import { crearStripeProvider } from './stripe/stripe.module';
+import { crearSquareProvider } from './square/square.module';
 
 /** Los adaptadores que esta instalación puede usar, según sus credenciales. */
 export function montarAdaptadores(config: Config): PaymentProvider[] {
   const posibles: Array<PaymentProvider | null> = [
     crearStripeProvider(config),
-    // crearSquareProvider(),
+    crearSquareProvider(config),
     // crearAdyenProvider(),
   ];
   return posibles.filter((p): p is PaymentProvider => p !== null);

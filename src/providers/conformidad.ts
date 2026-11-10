@@ -53,6 +53,18 @@ export interface ArnesDeConformidad {
    */
   ultimaPeticion(): unknown;
 
+  /**
+   * Lo que ese procesador exige para poder crear un cobro **siquiera**.
+   *
+   * No todos empiezan igual: Stripe crea el cobro y la app lo confirma después
+   * con el `clientSecret`, mientras Square exige que la app tokenice la tarjeta
+   * primero y manda ese token en la creación. El arnés añade aquí lo que su
+   * procesador necesita (`cardRef`, por ejemplo) y las reglas de abajo se
+   * comprueban igual: lo que no se admite es relajar una regla, no decir con
+   * qué datos se cobra.
+   */
+  extras?: Partial<AuthorizeCommand>;
+
   /** Monta el adaptador de forma que la siguiente llamada la rechace la tarjeta. */
   montarConRechazo(): PaymentProvider;
 
@@ -114,6 +126,8 @@ export function llevaLaClave(peticion: unknown, clave: string): boolean {
 }
 
 export function pruebasDeConformidad(arnes: ArnesDeConformidad): void {
+  const cobro: AuthorizeCommand = { ...COBRO, ...(arnes.extras ?? {}) };
+
   describe(`${arnes.nombre} · conformidad con el contrato`, () => {
     describe('qué dice que sabe hacer', () => {
       it('se llama como se registra', () => {
@@ -123,10 +137,24 @@ export function pruebasDeConformidad(arnes: ArnesDeConformidad): void {
       });
 
       // Un procesador que no reparte en la captura y tampoco sabe pagar a
-      // terceros no sirve para nada aquí: no habría forma de pagarle al chofer.
-      it('puede pagarle al chofer de alguna de las dos maneras', () => {
-        const { capabilities: c } = arnes.montar();
-        expect(c.splitAtCapture || c.payouts).toBe(true);
+      // terceros no puede pagarle al chofer. Se admite —cobrar ya sirve de
+      // algo—, pero **tiene que negarse en voz alta**: una transferencia que no
+      // hace nada y tampoco falla deja al chofer esperando un pago que nadie va
+      // a mandar, y en el libro el reparto queda como hecho. Es el hallazgo 04
+      // otra vez, visto por el otro lado.
+      it('O SABE PAGARLE AL CHOFER, O SE NIEGA EN VOZ ALTA', async () => {
+        const p = arnes.montar();
+        if (p.capabilities.splitAtCapture || p.capabilities.payouts) return;
+        await expect(
+          p.transfer({
+            idempotencyKey: 'k_transfer_conformidad',
+            payeeRef: 'payee_conformidad',
+            amount: 7400,
+            currency: 'USD',
+            reference: { rideId: 'ride-conformidad' },
+          }),
+          'transfer() no falló: un reparto que no va a ocurrir tiene que fallar',
+        ).rejects.toThrow();
       });
 
       it('declara al menos una moneda', () => {
@@ -161,24 +189,24 @@ export function pruebasDeConformidad(arnes: ArnesDeConformidad): void {
     describe('lo que devuelve', () => {
       it('firma todo con su propio nombre', async () => {
         const p = arnes.montar();
-        const a = await p.authorize(COBRO);
+        const a = await p.authorize(cobro);
         expect(a.provider).toBe(p.name);
         expect(a.providerRef).toBeTruthy();
       });
 
       it('los importes son centavos enteros', async () => {
-        const a = await arnes.montar().authorize(COBRO);
+        const a = await arnes.montar().authorize(cobro);
         expect(Number.isInteger(a.amount)).toBe(true);
       });
 
       // Crear un cobro no es cobrarlo: una retención no puede volver capturada.
       it('UNA RETENCIÓN NO VUELVE COMO COBRADA', async () => {
-        const a = await arnes.montar().authorize({ ...COBRO, hold: true });
+        const a = await arnes.montar().authorize({ ...cobro, hold: true });
         expect(['authorized', 'requires_action']).toContain(a.status);
       });
 
       it('el estado es uno de los del contrato', async () => {
-        const a = await arnes.montar().authorize(COBRO);
+        const a = await arnes.montar().authorize(cobro);
         expect(['requires_action', 'authorized', 'captured', 'failed', 'voided']).toContain(a.status);
       });
     });
@@ -189,7 +217,7 @@ export function pruebasDeConformidad(arnes: ArnesDeConformidad): void {
       it('EL COBRO NO LLEVA EL REPARTO DENTRO', async () => {
         const p = arnes.montar();
         if (p.capabilities.splitAtCapture) return; // ese procesador sí reparte al capturar
-        await p.authorize(COBRO);
+        await p.authorize(cobro);
         const delatora = mencionaReparto(arnes.ultimaPeticion());
         expect(delatora, `el cobro menciona '${delatora}'`).toBeNull();
       });
@@ -198,8 +226,8 @@ export function pruebasDeConformidad(arnes: ArnesDeConformidad): void {
       // un reintento la pagaba dos veces.
       it('LA CLAVE DE IDEMPOTENCIA LLEGA AL PROCESADOR', async () => {
         const p = arnes.montar();
-        await p.authorize(COBRO);
-        expect(llevaLaClave(arnes.ultimaPeticion(), COBRO.idempotencyKey)).toBe(true);
+        await p.authorize(cobro);
+        expect(llevaLaClave(arnes.ultimaPeticion(), cobro.idempotencyKey)).toBe(true);
       });
 
       it('y también al capturar', async () => {
@@ -220,8 +248,8 @@ export function pruebasDeConformidad(arnes: ArnesDeConformidad): void {
       // camino, un fallo del procesador sí.
       it('UNA TARJETA RECHAZADA ES UN PagoRechazadoError CON CÓDIGO', async () => {
         const p = arnes.montarConRechazo();
-        await expect(p.authorize(COBRO)).rejects.toThrow(PagoRechazadoError);
-        await p.authorize(COBRO).catch((e: unknown) => {
+        await expect(p.authorize(cobro)).rejects.toThrow(PagoRechazadoError);
+        await p.authorize(cobro).catch((e: unknown) => {
           expect(e).toBeInstanceOf(PagoRechazadoError);
           expect((e as PagoRechazadoError).codigo).toBeTruthy();
           expect((e as PagoRechazadoError).provider).toBe(p.name);
@@ -230,7 +258,7 @@ export function pruebasDeConformidad(arnes: ArnesDeConformidad): void {
 
       it('un fallo del procesador es un ProcesadorFalloError', async () => {
         const p = arnes.montarConFalloDelProcesador();
-        await expect(p.authorize(COBRO)).rejects.toThrow(ProcesadorFalloError);
+        await expect(p.authorize(cobro)).rejects.toThrow(ProcesadorFalloError);
       });
 
       it('y nunca se escapa el error crudo del SDK', async () => {
@@ -248,7 +276,7 @@ export function pruebasDeConformidad(arnes: ArnesDeConformidad): void {
       it('tampoco lleva el reparto dentro', async () => {
         const p = arnes.montar();
         if (!p.capabilities.tapToPay || !p.presentCharge || p.capabilities.splitAtCapture) return;
-        await p.presentCharge({ ...COBRO, hold: false });
+        await p.presentCharge({ ...cobro, hold: false });
         const delatora = mencionaReparto(arnes.ultimaPeticion());
         expect(delatora, `el cobro presencial menciona '${delatora}'`).toBeNull();
       });
@@ -256,8 +284,8 @@ export function pruebasDeConformidad(arnes: ArnesDeConformidad): void {
       it('y también lleva la clave de idempotencia', async () => {
         const p = arnes.montar();
         if (!p.capabilities.tapToPay || !p.presentCharge) return;
-        await p.presentCharge({ ...COBRO, hold: false });
-        expect(llevaLaClave(arnes.ultimaPeticion(), COBRO.idempotencyKey)).toBe(true);
+        await p.presentCharge({ ...cobro, hold: false });
+        expect(llevaLaClave(arnes.ultimaPeticion(), cobro.idempotencyKey)).toBe(true);
       });
 
       it('el token del lector viene firmado por su procesador', async () => {

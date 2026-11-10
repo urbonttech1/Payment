@@ -64,6 +64,36 @@ const esquema = z.object({
    * no para cobrar de verdad en un iPhone.
    */
   STRIPE_TERMINAL_LOCATION_ID: z.string().optional(),
+
+  /**
+   * Square. Hacen falta **las dos**: sin localización, Square rechaza el cobro.
+   *
+   * El entorno es explícito porque el token de sandbox y el de producción no se
+   * distinguen mirándolos, y un token de sandbox cobrando de verdad (o al
+   * revés) es la clase de error que no se ve hasta que el dinero no llega.
+   */
+  SQUARE_ACCESS_TOKEN: z.string().optional(),
+  SQUARE_LOCATION_ID: z.string().optional(),
+  /**
+   * `sandbox` o `production`. Vacío cuenta como `production`.
+   *
+   * Lo vacío se trata aparte a propósito: ECS inyecta `""` para una variable
+   * que no está puesta, y un servicio de pagos que no arranca por una cadena
+   * vacía es peor que uno que arranca apuntando a producción, que es donde de
+   * verdad está la cuenta.
+   */
+  SQUARE_ENVIRONMENT: z.preprocess(
+    (v) => (v === '' || v === undefined ? 'production' : v),
+    z.enum(['sandbox', 'production']),
+  ),
+  SQUARE_WEBHOOK_SIGNATURE_KEY: z.string().optional(),
+  /**
+   * La URL EXACTA que está puesta en el panel de Square.
+   *
+   * Square firma incluyendo la URL de entrega, así que un carácter de
+   * diferencia hace que ninguna firma cuadre nunca. Es configuración por eso.
+   */
+  SQUARE_WEBHOOK_NOTIFICATION_URL: z.string().url().optional(),
 });
 
 export type Config = z.infer<typeof esquema>;

@@ -31,6 +31,8 @@ src/
     provider.port.ts       El contrato único
     provider.registry.ts   Qué procesador atiende cada operación
     stripe/                Adaptador Stripe        ← fase 2
+    square/                Adaptador Square        ← fase 7
+    conformidad.ts         Las pruebas que todo adaptador tiene que pasar
   payments/    Casos de uso: autorizar, capturar, reembolsar   ← fase 2
   ledger/      Libro de cobros, asientos e idempotencia        ← fases 2 y 4
   internal/    Lo que llama urbont-api, firmado                ← fase 3
@@ -90,6 +92,47 @@ costó dinero en este proyecto: que el cobro no lleve el reparto dentro, que tod
 lo que mueve dinero lleve clave de idempotencia, y que una retención no vuelva
 como cobrada. Y la propia suite tiene pruebas (`conformidad.test.ts`), porque
 una que pase siempre da una confianza falsa.
+
+### Lo que enseñó el segundo adaptador
+
+Square pasa la suite entera, y eso es la buena noticia: el contrato aguanta un
+procesador que por dentro funciona distinto. Lo valioso son las diferencias que
+sólo aparecen al escribirlo, y que están **declaradas en `capabilities`** en vez
+de descubrirse en producción.
+
+| | Stripe | Square |
+|---|---|---|
+| Crear el cobro | el servidor lo crea, la app lo confirma con el `clientSecret` | **la app tokeniza primero** y manda el token en la creación |
+| Capturar menos | `amount_to_capture` | bajar el importe aprobado y completar (dos llamadas) |
+| Subir el importe | `paymentIntents.update` | el mismo `UpdatePayment` |
+| Pagar al chofer | transferencia por beneficiario | **no se puede por aquí** |
+| Guardar una tarjeta | `SetupIntent` desde el servidor | **no se puede por aquí**: necesita token de la app |
+| Metadata | 50 claves | no existe: sólo `reference_id` y una nota |
+| Tap to Pay | token de sesión del servidor | su SDK usa el token OAuth; no hay equivalente |
+
+Las tres filas en negrita son las que importan antes de encender nada:
+
+- **El reparto.** Square no transfiere a terceros: el reparto va dentro del
+  cobro (`appFeeMoney`), con el chofer como vendedor. El contrato no lleva
+  beneficiario en el cobro —a propósito— así que un cobro hecho por Square **no
+  se puede repartir con el motor de hoy**. El adaptador lo dice en
+  `capabilities` (`payouts: false`, `splitAtCapture: false`) y `transfer()`
+  lanza en voz alta, de modo que el reparto queda fallido a la vista en vez de
+  darse por pagado. Esa es una regla nueva de la suite: *o sabe pagarle al
+  chofer, o se niega en voz alta*.
+- **El cobro del viaje por Square necesita cambio de app**, porque hoy la app
+  no manda ningún token de tarjeta.
+- **Una tarjeta pertenece al procesador que la guardó.** Hoy el registro elige
+  el procesador de un cobro con tarjeta guardada por capacidad, no por quién
+  guardó la tarjeta. Con `savedCards: false` en Square no puede pasar nada malo,
+  pero el día que haya dos procesadores que guarden tarjetas, esa elección tiene
+  que hacerse por el dueño de la tarjeta.
+
+Las credenciales de un procesador nuevo **no son variables de entorno**: se
+pegan en el panel (URBONT PAYMENTS → Configuración), se prueban contra el
+procesador antes de guardarse y se guardan cifradas. Lo único que hay que
+escribir en el servicio es su lista de campos (`CAMPOS` en
+`src/config/credentials.service.ts`) y el panel dibuja el formulario solo.
 
 ## Las dos reglas que gobiernan el diseño
 

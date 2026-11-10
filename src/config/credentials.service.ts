@@ -26,6 +26,7 @@ import { POOL } from '../db/pool';
 import { CONFIG, type Config } from './config';
 import { ProviderRegistry } from '../providers/provider.registry';
 import { crearStripeProvider } from '../providers/stripe/stripe.module';
+import { crearSquareProvider } from '../providers/square/square.module';
 import type { PaymentProvider, ProviderName } from '../providers/provider.port';
 import { cifrar, claveMaestra, descifrar, hayClaveMaestra, pista } from './cifrado';
 
@@ -45,6 +46,15 @@ export const CAMPOS: Record<string, CampoDeCredencial[]> = {
     { nombre: 'webhookSecret', etiqueta: 'Secreto del webhook', requerido: false, secreto: true, ayuda: 'whsec_… del endpoint de la cuenta' },
     { nombre: 'webhookSecretConnect', etiqueta: 'Secreto del webhook de Connect', requerido: false, secreto: true, ayuda: 'El de las cuentas de los choferes' },
     { nombre: 'terminalLocationId', etiqueta: 'Location de Tap to Pay', requerido: false, secreto: false, ayuda: 'tml_… sin esto el lector solo funciona simulado' },
+  ],
+  // Square pide DOS cosas, no una: sin localización rechaza cada cobro. Por eso
+  // las dos son obligatorias y el `ping` no pasaría sin ellas.
+  square: [
+    { nombre: 'accessToken', etiqueta: 'Token de acceso', requerido: true, secreto: true, ayuda: 'EAAA… del panel de Square; el de sandbox solo cobra en pruebas' },
+    { nombre: 'locationId', etiqueta: 'Localización que cobra', requerido: true, secreto: false, ayuda: 'L… la location del vendedor' },
+    { nombre: 'environment', etiqueta: 'Entorno', requerido: false, secreto: false, ayuda: 'sandbox o production; vacío = production' },
+    { nombre: 'webhookSignatureKey', etiqueta: 'Clave de firma del webhook', requerido: false, secreto: true, ayuda: 'La del endpoint, en el panel de Square' },
+    { nombre: 'webhookNotificationUrl', etiqueta: 'URL de entrega del webhook', requerido: false, secreto: false, ayuda: 'La URL EXACTA del panel de Square: Square firma incluyéndola, y un carácter de diferencia hace que ninguna firma cuadre' },
   ],
 };
 
@@ -247,7 +257,16 @@ export class CredentialsService implements OnModuleInit {
         STRIPE_TERMINAL_LOCATION_ID: valores.terminalLocationId || undefined,
       });
     }
-    // Square, Adyen, Finix…: cuando exista su adaptador, se añade aquí y en
+    if (provider === 'square') {
+      return crearSquareProvider({
+        SQUARE_ACCESS_TOKEN: valores.accessToken,
+        SQUARE_LOCATION_ID: valores.locationId,
+        SQUARE_ENVIRONMENT: valores.environment === 'sandbox' ? 'sandbox' : 'production',
+        SQUARE_WEBHOOK_SIGNATURE_KEY: valores.webhookSignatureKey || undefined,
+        SQUARE_WEBHOOK_NOTIFICATION_URL: valores.webhookNotificationUrl || undefined,
+      });
+    }
+    // Adyen, Finix, PayPal…: cuando exista su adaptador, se añade aquí y en
     // CAMPOS, y el panel dibuja su formulario solo.
     return null;
   }
