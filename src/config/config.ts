@@ -46,6 +46,13 @@ const esquema = z.object({
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
   /** Los eventos de Connect llegan por otro endpoint, con su propio secreto. */
   STRIPE_WEBHOOK_SECRET_CONNECT: z.string().optional(),
+  /**
+   * La *location* de Stripe Terminal para Tap to Pay.
+   *
+   * Sin ella el token del lector sale genérico: vale para el lector simulado y
+   * no para cobrar de verdad en un iPhone.
+   */
+  STRIPE_TERMINAL_LOCATION_ID: z.string().optional(),
 });
 
 export type Config = z.infer<typeof esquema>;

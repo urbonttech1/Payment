@@ -41,6 +41,7 @@ import type {
   SaveCardCommand,
   SavedCard,
   SettlementCharge,
+  TerminalSession,
   Transfer,
   TransferCommand,
   VoidCommand,
@@ -96,6 +97,13 @@ export class StripeProvider implements PaymentProvider {
   constructor(
     private readonly stripe: Stripe,
     private readonly webhookSecrets: string[],
+    /**
+     * La *location* de Stripe Terminal a la que se conecta el teléfono.
+     *
+     * Stripe la exige para emitir el token del lector. Es un concepto suyo, y
+     * por eso entra por el constructor del adaptador y no por el contrato.
+     */
+    private readonly terminalLocation?: string,
   ) {}
 
   // ── Cobrar ────────────────────────────────────────────────────────────────
@@ -356,18 +364,41 @@ export class StripeProvider implements PaymentProvider {
   // ── Tap to Pay ────────────────────────────────────────────────────────────
 
   async presentCharge(cmd: PresentChargeCommand): Promise<Authorization> {
-    const pi = await this.stripe.paymentIntents.create(
-      {
-        amount: cmd.amount,
-        currency: cmd.currency.toLowerCase(),
-        payment_method_types: ['card_present'],
-        capture_method: cmd.hold ? 'manual' : 'automatic',
-        metadata: { ...this.metadatos(cmd), presencial: 'true' },
-      },
-      { idempotencyKey: cmd.idempotencyKey },
-    );
+    return this.traduciendoErrores(async () => {
+      const pi = await this.stripe.paymentIntents.create(
+        {
+          amount: cmd.amount,
+          currency: cmd.currency.toLowerCase(),
+          payment_method_types: ['card_present'],
+          capture_method: cmd.hold ? 'manual' : 'automatic',
+          ...(cmd.description ? { description: cmd.description } : {}),
+          metadata: { ...this.metadatos(cmd), presencial: 'true' },
+        },
+        { idempotencyKey: cmd.idempotencyKey },
+      );
 
-    return this.aAutorizacion(pi);
+      return this.aAutorizacion(pi);
+    });
+  }
+
+  /**
+   * El token con el que el teléfono del chofer se vuelve lector.
+   *
+   * Dura minutos y no se guarda en ninguna parte: se pide uno por sesión de
+   * cobro. La *location* va si está configurada; sin ella Stripe emite un token
+   * genérico, que sirve para el lector simulado pero no para Tap to Pay real.
+   */
+  async terminalSession(): Promise<TerminalSession> {
+    return this.traduciendoErrores(async () => {
+      const t = await this.stripe.terminal.connectionTokens.create(
+        this.terminalLocation ? { location: this.terminalLocation } : {},
+      );
+      return {
+        provider: this.name,
+        token: t.secret,
+        ...(this.terminalLocation ? { locationRef: this.terminalLocation } : {}),
+      };
+    });
   }
 
   // ── Conciliación ──────────────────────────────────────────────────────────

@@ -38,6 +38,7 @@ src/
   payees/      La cuenta de cobro de cada persona, por procesador ← fase 4
   webhooks/    Avisos del procesador: firma, idempotencia y aviso a urbont-api ← fase 6
   reconciliation/ Cuadre contra el extracto del procesador     ← fase 6
+  (el cobro presencial vive en payments/ e internal/)          ← fase 8
 db/migrations/ Esquema `payments`, aplicado al arrancar
 ```
 
@@ -55,6 +56,8 @@ Nada de esto lo llama la app: sólo `urbont-api`, y firmado (ver
 | `POST /internal/charges/:clave/refund` | Devuelve dinero ya cobrado. |
 | `POST /internal/charges/:clave/settle` | Reparte lo capturado entre chofer, valet y URBONT. Con `dryRun`, sólo calcula. |
 | `GET /internal/charges/:clave/splits` | El reparto, tal como esté. |
+| `POST /internal/terminal/session` | El token con el que el teléfono del chofer se vuelve lector. |
+| `POST /internal/terminal/charges` | Prepara un cobro presencial. Lo remata el SDK del teléfono. |
 | `POST /internal/webhooks/retry` | Reintenta los avisos del procesador que quedaron pendientes. |
 | `POST /internal/reconciliation/run` | Cuadra un período contra el extracto del procesador. |
 | `POST /webhooks/:provider` | Los avisos del procesador. **Sin firma de URBONT**: lo que autentica aquí es la firma del procesador, que comprueba su adaptador contra el cuerpo crudo. |

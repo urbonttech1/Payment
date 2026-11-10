@@ -50,6 +50,8 @@ const servicioFalso = {
   anular: vi.fn(),
   reembolsar: vi.fn(),
   porClave: vi.fn(),
+  cobrarEnPersona: vi.fn(),
+  sesionDeTerminal: vi.fn(),
 };
 
 const repartoFalso = {
@@ -146,6 +148,13 @@ beforeEach(() => {
       { type: 'driver', beneficiaryId: DRIVER, amountCents: 7400, deductionCents: 0, status: 'paid', transferRef: 'tr_1', failureCode: null },
       { type: 'platform', beneficiaryId: null, amountCents: 4315, deductionCents: 0, status: 'paid', transferRef: null, failureCode: null },
     ],
+  });
+  servicioFalso.sesionDeTerminal.mockResolvedValue({
+    provider: 'stripe', token: 'pst_1', locationRef: 'tml_1',
+  });
+  servicioFalso.cobrarEnPersona.mockResolvedValue({
+    transaccion: { ...transaccion, idempotencyKey: 'tap_to_pay_abc_1', status: 'pending', providerRef: 'pi_presencial' },
+    autorizacion: { clientSecret: 'pi_presencial_secret' },
   });
   repartoFalso.consultar.mockResolvedValue({
     chargeKey: CLAVE,
@@ -370,6 +379,61 @@ describe('repartir', () => {
     const r = await llamar('GET', `/internal/charges/${CLAVE}/splits`);
     expect(r.estado).toBe(404);
     expect(r.cuerpo).toMatchObject({ error: 'CHARGE_NOT_FOUND' });
+  });
+});
+
+describe('el cobro en persona', () => {
+  it('el token del lector va firmado y sin saber de quién es', async () => {
+    const r = await llamar('POST', '/internal/terminal/session', { cuerpo: {} });
+
+    expect(r.estado).toBe(200);
+    expect(r.cuerpo).toMatchObject({ provider: 'stripe', token: 'pst_1', locationRef: 'tml_1' });
+  });
+
+  it('sin firma no se pide un token: pedirlo cuesta en el procesador', async () => {
+    const r = await fetch(`${base}/internal/terminal/session`, { method: 'POST' });
+    expect(r.status).toBe(401);
+    expect(servicioFalso.sesionDeTerminal).not.toHaveBeenCalled();
+  });
+
+  it('prepara el cobro y devuelve el secreto con el que lo remata el teléfono', async () => {
+    const r = await llamar('POST', '/internal/terminal/charges', {
+      cuerpo: {
+        chargeKey: 'tap_to_pay_abc_1',
+        kind: 'ride',
+        amountCents: 11715,
+        taxCents: 715,
+        rideId: DRIVER,
+        metadata: { type: 'tap_to_pay', commission_rate: '0.15' },
+      },
+    });
+
+    expect(r.estado).toBe(200);
+    expect(r.cuerpo).toMatchObject({ status: 'pending', clientSecret: 'pi_presencial_secret' });
+    expect(servicioFalso.cobrarEnPersona).toHaveBeenCalledWith(
+      expect.objectContaining({ idempotencyKey: 'tap_to_pay_abc_1', hold: false, taxCents: 715 }),
+    );
+  });
+
+  // En persona se cobra en el acto: no hay nada que retener, y el cuerpo no
+  // tiene forma de pedir una retención.
+  it('el cuerpo no puede pedir una retención', async () => {
+    await llamar('POST', '/internal/terminal/charges', {
+      cuerpo: { chargeKey: 'tap_to_pay_abc_1', kind: 'ride', amountCents: 11715, hold: true },
+    });
+    expect(servicioFalso.cobrarEnPersona).toHaveBeenCalledWith(expect.objectContaining({ hold: false }));
+  });
+
+  it('una petición sin clave o con importe imposible se rechaza aquí', async () => {
+    for (const cuerpo of [
+      { kind: 'ride', amountCents: 11715 },
+      { chargeKey: 'tap_to_pay_abc_1', kind: 'ride', amountCents: 0 },
+      { chargeKey: 'corta', kind: 'ride', amountCents: 100 },
+    ]) {
+      const r = await llamar('POST', '/internal/terminal/charges', { cuerpo });
+      expect(r.estado).toBe(400);
+    }
+    expect(servicioFalso.cobrarEnPersona).not.toHaveBeenCalled();
   });
 });
 

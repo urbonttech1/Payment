@@ -296,6 +296,33 @@ export interface PresentChargeCommand extends AuthorizeCommand {
 }
 
 /**
+ * Lo que el teléfono del chofer necesita para convertirse en lector.
+ *
+ * Es la pieza que faltaba para que Tap to Pay sea de verdad intercambiable. El
+ * cobro presencial ya estaba en el contrato (`presentCharge`), pero el SDK que
+ * corre en el teléfono no puede empezar sin un token que **sólo el backend
+ * puede pedir**, y ese token es lo más propio de cada procesador que hay en
+ * todo esto: Stripe lo llama *connection token* y lo ata a una *location*,
+ * Adyen y Square tienen cada uno el suyo.
+ *
+ * Sin esto en el contrato, la app tendría que saber qué procesador está activo
+ * para saber a qué endpoint pedir el token, y eso es exactamente lo que este
+ * servicio existe para evitar.
+ */
+export interface TerminalSession {
+  provider: ProviderName;
+  /** El token con el que el SDK del teléfono se conecta. */
+  token: string;
+  /** Cuándo caduca, si el procesador lo dice. */
+  expiresAt?: Date;
+  /**
+   * El sitio al que se conecta el lector, si el procesador tiene ese concepto.
+   * En Stripe es la *location*; otros no lo usan.
+   */
+  locationRef?: string;
+}
+
+/**
  * Una línea del extracto del procesador.
  *
  * `netCents` es lo que de verdad quedó: lo capturado menos lo devuelto. Es el
@@ -366,6 +393,13 @@ export interface PaymentProvider {
 
   /** Sólo con `capabilities.tapToPay`. */
   presentCharge?(cmd: PresentChargeCommand): Promise<Authorization>;
+
+  /**
+   * El token de sesión del lector. Sólo con `capabilities.tapToPay`.
+   *
+   * Caduca pronto y no se guarda: se pide una vez por sesión de cobro.
+   */
+  terminalSession?(): Promise<TerminalSession>;
 
   /** Verifica la firma y traduce. Debe lanzar si la firma no cuadra. */
   parseWebhook(req: WebhookRequest): Promise<ProviderEvent[]>;

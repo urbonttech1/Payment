@@ -35,7 +35,7 @@ export function crearStripeProvider(config: Config): StripeProvider | null {
   const secretos = [config.STRIPE_WEBHOOK_SECRET, config.STRIPE_WEBHOOK_SECRET_CONNECT]
     .filter((s): s is string => !!s);
 
-  return new StripeProvider(stripe, secretos);
+  return new StripeProvider(stripe, secretos, config.STRIPE_TERMINAL_LOCATION_ID);
 }
 
 @Module({

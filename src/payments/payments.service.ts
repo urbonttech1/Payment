@@ -33,6 +33,7 @@ import type {
   Currency,
   PaymentProvider,
   Refund,
+  TerminalSession,
 } from '../providers/provider.port';
 
 export class TransaccionNoEncontradaError extends Error {
@@ -192,6 +193,95 @@ export class PaymentsService {
         this.log.warn(`${tx.idempotencyKey}: el cobro ${a.providerRef} quedó en '${a.status}'.`);
         return this.transacciones.marcarFallida(tx.id, `provider_status_${a.status}`);
     }
+  }
+
+  /**
+   * Cobra en persona, con el teléfono del chofer como lector.
+   *
+   * Es el mismo caso de uso que `autorizar` —primero el libro, después el
+   * procesador— con dos diferencias que vienen del contrato:
+   *
+   *  · Exige la capacidad `tapToPay`, así que el registro elige un procesador
+   *    que sepa hacerlo aunque el de por defecto no sepa.
+   *  · El cobro lo **confirma el SDK del teléfono**, no nosotros: lo que se
+   *    devuelve es el secreto con el que ese SDK lo remata. Hasta que remate, el
+   *    cobro no ha ocurrido, y el libro lo dice.
+   *
+   * Hoy el cobro presencial no pasa por ningún libro: se crea en Stripe y se
+   * entera el webhook. Que pase por aquí es justo lo que hace que un cobro en
+   * persona se pueda conciliar como cualquier otro.
+   */
+  async cobrarEnPersona(
+    p: PeticionDeCobro & { terminalRef?: string },
+  ): Promise<{ transaccion: Transaction; autorizacion: Authorization | null }> {
+    const provider = this.registry.paraCobroNuevo(['tapToPay']);
+    if (!provider.presentCharge) {
+      throw new EstadoInesperadoError(
+        `'${provider.name}' dice saber cobrar en persona pero no implementa presentCharge.`,
+      );
+    }
+
+    const { transaccion, yaExistia } = await this.transacciones.crearSiNoExiste({
+      idempotencyKey: p.idempotencyKey,
+      provider: provider.name,
+      kind: p.kind,
+      rideId: p.rideId ?? null,
+      payerId: p.payerId ?? null,
+      amountCents: p.amountCents,
+      taxCents: p.taxCents ?? 0,
+      currency: p.currency,
+    });
+
+    // Un reintento del chofer —le dio dos veces al botón, se le fue la red—
+    // devuelve el mismo cobro, no uno nuevo.
+    if (yaExistia && transaccion.providerRef) {
+      this.log.log(`Reintento presencial de ${p.idempotencyKey}: ya existe ${transaccion.providerRef}.`);
+      let autorizacion: Authorization | null = null;
+      try {
+        autorizacion = await this.registry
+          .paraCobroExistente(transaccion.provider)
+          .getAuthorization(transaccion.providerRef);
+      } catch (e) {
+        this.log.warn(`No se pudo releer ${transaccion.providerRef}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      return { transaccion, autorizacion };
+    }
+
+    try {
+      const autorizacion = await provider.presentCharge({
+        idempotencyKey: p.idempotencyKey,
+        kind: p.kind,
+        amount: p.amountCents,
+        currency: p.currency,
+        hold: p.hold,
+        taxAmount: p.taxCents,
+        description: p.description,
+        reference: { rideId: p.rideId, payerId: p.payerId },
+        metadata: p.metadata,
+        ...(p.terminalRef ? { terminalRef: p.terminalRef } : {}),
+      });
+
+      const actualizada = await this.anotarElResultado(transaccion, autorizacion);
+      return { transaccion: actualizada, autorizacion };
+    } catch (e) {
+      await this.transacciones.marcarFallida(transaccion.id, this.codigoDeError(e));
+      throw e;
+    }
+  }
+
+  /**
+   * El token con el que el teléfono del chofer se vuelve lector.
+   *
+   * No se guarda ni se reutiliza: dura minutos y se pide uno por sesión.
+   */
+  async sesionDeTerminal(): Promise<TerminalSession> {
+    const provider = this.registry.paraCobroNuevo(['tapToPay']);
+    if (!provider.terminalSession) {
+      throw new EstadoInesperadoError(
+        `'${provider.name}' dice saber cobrar en persona pero no implementa terminalSession.`,
+      );
+    }
+    return provider.terminalSession();
   }
 
   /**

@@ -135,14 +135,26 @@ export function pruebasDeConformidad(arnes: ArnesDeConformidad): void {
 
       it('lo que dice que sabe hacer, lo tiene implementado', () => {
         const p = arnes.montar();
-        if (p.capabilities.tapToPay) expect(typeof p.presentCharge).toBe('function');
         if (p.capabilities.increaseAuthorization) expect(typeof p.increaseAuthorization).toBe('function');
       });
 
       it('y lo que no, no lo anuncia a medias', () => {
         const p = arnes.montar();
-        if (!p.capabilities.tapToPay) expect(p.presentCharge).toBeUndefined();
+        if (!p.capabilities.tapToPay) {
+          expect(p.presentCharge).toBeUndefined();
+          expect(p.terminalSession).toBeUndefined();
+        }
         if (!p.capabilities.increaseAuthorization) expect(p.increaseAuthorization).toBeUndefined();
+      });
+
+      // Tap to Pay son DOS mitades y la que se olvida es siempre la misma: el
+      // token de sesión. Sin él, el SDK del teléfono no arranca y el cobro
+      // presencial no existe, por mucho que `presentCharge` esté escrito.
+      it('TAP TO PAY EXIGE EL COBRO Y EL TOKEN DEL LECTOR', () => {
+        const p = arnes.montar();
+        if (!p.capabilities.tapToPay) return;
+        expect(typeof p.presentCharge, 'falta presentCharge').toBe('function');
+        expect(typeof p.terminalSession, 'falta terminalSession').toBe('function');
       });
     });
 
@@ -229,6 +241,31 @@ export function pruebasDeConformidad(arnes: ArnesDeConformidad): void {
             `se escapó ${(e as Error)?.name}`,
           ).toBe(true);
         });
+      });
+    });
+
+    describe('el cobro en persona', () => {
+      it('tampoco lleva el reparto dentro', async () => {
+        const p = arnes.montar();
+        if (!p.capabilities.tapToPay || !p.presentCharge || p.capabilities.splitAtCapture) return;
+        await p.presentCharge({ ...COBRO, hold: false });
+        const delatora = mencionaReparto(arnes.ultimaPeticion());
+        expect(delatora, `el cobro presencial menciona '${delatora}'`).toBeNull();
+      });
+
+      it('y también lleva la clave de idempotencia', async () => {
+        const p = arnes.montar();
+        if (!p.capabilities.tapToPay || !p.presentCharge) return;
+        await p.presentCharge({ ...COBRO, hold: false });
+        expect(llevaLaClave(arnes.ultimaPeticion(), COBRO.idempotencyKey)).toBe(true);
+      });
+
+      it('el token del lector viene firmado por su procesador', async () => {
+        const p = arnes.montar();
+        if (!p.capabilities.tapToPay || !p.terminalSession) return;
+        const s = await p.terminalSession();
+        expect(s.provider).toBe(p.name);
+        expect(s.token).toBeTruthy();
       });
     });
 

@@ -5,6 +5,7 @@ import { WebhooksModule } from '../webhooks/webhooks.module';
 import { ReconciliationModule } from '../reconciliation/reconciliation.module';
 import { ChargesController } from './charges.controller';
 import { OperacionesController } from './operaciones.controller';
+import { TerminalController } from './terminal.controller';
 import { ErroresDePagoFilter } from './errores.filter';
 import { FirmaGuard } from './firma.guard';
 
@@ -13,7 +14,7 @@ import { FirmaGuard } from './firma.guard';
  */
 @Module({
   imports: [PaymentsModule, SplitsModule, WebhooksModule, ReconciliationModule],
-  controllers: [ChargesController, OperacionesController],
+  controllers: [ChargesController, OperacionesController, TerminalController],
   providers: [FirmaGuard, ErroresDePagoFilter],
 })
 export class InternalModule {}

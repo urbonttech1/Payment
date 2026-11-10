@@ -110,10 +110,10 @@ const capacidades = (extra: Partial<ProviderCapabilities> = {}): ProviderCapabil
   manualCapture: true,
   partialCapture: true,
   increaseAuthorization: true,
+  tapToPay: true,
   savedCards: true,
   payouts: true,
   splitAtCapture: false,
-  tapToPay: false,
   bankDebit: false,
   currencies: ['USD'],
   ...extra,
@@ -143,6 +143,13 @@ function proveedorFalso(name: ProviderName) {
       providerRef: `${name}_ref_1`, provider: name, status: 'captured' as const,
       amount: 11000, currency: 'USD' as const, chargeRef: `${name}_cargo_1`,
     })),
+    presentCharge: vi.fn(async () => ({
+      providerRef: `${name}_ref_presencial`, provider: name, status: 'requires_action' as const,
+      amount: 11000, currency: 'USD' as const, clientSecret: `${name}_presencial_secret`,
+    })),
+    terminalSession: vi.fn(async () => ({
+      provider: name, token: 'pst_1', locationRef: 'tml_1',
+    })),
     voidAuthorization: vi.fn(async () => undefined),
     // Devuelve lo que se le pidió, como hace un procesador de verdad: el libro
     // apunta lo que el procesador dice que devolvió, no lo que se le pidió.
@@ -152,6 +159,8 @@ function proveedorFalso(name: ProviderName) {
   } as unknown as PaymentProvider & {
     authorize: ReturnType<typeof vi.fn>;
     chargeSavedCard: ReturnType<typeof vi.fn>;
+    presentCharge: ReturnType<typeof vi.fn>;
+    terminalSession: ReturnType<typeof vi.fn>;
     getAuthorization: ReturnType<typeof vi.fn>;
     increaseAuthorization: ReturnType<typeof vi.fn>;
     capture: ReturnType<typeof vi.fn>;
@@ -334,6 +343,79 @@ describe('PaymentsService · cobrar contra una tarjeta guardada', () => {
   it('guarda el cargo, que es lo que financia el pago al chofer', async () => {
     const { transaccion } = await servicio.autorizar(propina);
     expect(transaccion.chargeRef).toBe('stripe_cargo_1');
+  });
+});
+
+describe('PaymentsService · cobrar en persona', () => {
+  let libro: LibroEnMemoria;
+  let stripe: ReturnType<typeof proveedorFalso>;
+  let servicio: PaymentsService;
+
+  const presencial = {
+    idempotencyKey: 'tap_to_pay_ride-abc_intento1',
+    kind: 'ride' as const,
+    amountCents: 11715,
+    currency: 'USD' as const,
+    hold: false,
+    rideId: 'ride-abc',
+    payerId: 'drv-1',
+    taxCents: 715,
+  };
+
+  beforeEach(() => {
+    libro = new LibroEnMemoria();
+    stripe = proveedorFalso('stripe');
+    servicio = new PaymentsService(
+      new ProviderRegistry([stripe], 'stripe'), libro, new AsientosEnMemoria() as never,
+    );
+  });
+
+  // Hoy un cobro presencial se crea en Stripe y de él sólo se entera el
+  // webhook: no está en ningún libro, así que no se puede conciliar.
+  it('EL COBRO PRESENCIAL QUEDA EN EL LIBRO', async () => {
+    const { transaccion } = await servicio.cobrarEnPersona(presencial);
+
+    expect(stripe.presentCharge).toHaveBeenCalledOnce();
+    expect(transaccion.idempotencyKey).toBe(presencial.idempotencyKey);
+    expect(transaccion.providerRef).toBe('stripe_ref_presencial');
+  });
+
+  // Lo remata el SDK del teléfono. Hasta entonces no ha pasado nada, y dar por
+  // cobrado lo que no se ha cobrado es el fallo que ya le mostró a un chofer
+  // una propina que nadie pagó.
+  it('mientras el teléfono no lo remate, el cobro NO está hecho', async () => {
+    const { transaccion, autorizacion } = await servicio.cobrarEnPersona(presencial);
+
+    expect(transaccion.status).toBe('pending');
+    expect(autorizacion?.clientSecret).toBe('stripe_presencial_secret');
+  });
+
+  it('va por el camino presencial, no por el del cobro con tarjeta', async () => {
+    await servicio.cobrarEnPersona(presencial);
+    expect(stripe.authorize).not.toHaveBeenCalled();
+    expect(stripe.chargeSavedCard).not.toHaveBeenCalled();
+  });
+
+  it('el chofer que le da dos veces al botón no crea dos cobros', async () => {
+    await servicio.cobrarEnPersona(presencial);
+    await servicio.cobrarEnPersona(presencial);
+    expect(stripe.presentCharge).toHaveBeenCalledOnce();
+  });
+
+  it('sin un procesador que sepa cobrar en persona, no se cobra', async () => {
+    const corto = proveedorFalso('paypal');
+    (corto as unknown as { capabilities: ProviderCapabilities }).capabilities =
+      capacidades({ tapToPay: false });
+    const servicio2 = new PaymentsService(
+      new ProviderRegistry([corto], 'paypal'), libro, new AsientosEnMemoria() as never,
+    );
+
+    await expect(servicio2.cobrarEnPersona(presencial)).rejects.toThrow(/tapToPay/);
+  });
+
+  it('el token del lector viene del procesador que cobra', async () => {
+    const sesion = await servicio.sesionDeTerminal();
+    expect(sesion).toMatchObject({ provider: 'stripe', token: 'pst_1', locationRef: 'tml_1' });
   });
 });
 
