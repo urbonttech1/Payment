@@ -67,3 +67,38 @@ describe('ProviderRegistry', () => {
     });
   });
 });
+
+// El procesador por defecto se edita desde el panel, así que no puede quedarse
+// fijado en el arranque: cambiarlo obligaría a redesplegar.
+describe('cambiar el procesador en caliente', () => {
+  it('los cobros nuevos pasan al nuevo', () => {
+    const r = new ProviderRegistry([fake('stripe'), fake('adyen')], 'stripe');
+    expect(r.paraCobroNuevo().name).toBe('stripe');
+
+    r.fijarPorDefecto('adyen');
+
+    expect(r.porDefecto).toBe('adyen');
+    expect(r.paraCobroNuevo().name).toBe('adyen');
+  });
+
+  // La regla 1 del contrato no se negocia ni desde el panel.
+  it('UN COBRO EXISTENTE SIGUE EN EL SUYO', () => {
+    const r = new ProviderRegistry([fake('stripe'), fake('adyen')], 'stripe');
+    r.fijarPorDefecto('adyen');
+    expect(r.paraCobroExistente('stripe').name).toBe('stripe');
+  });
+
+  // Dejar el servicio apuntando a un procesador sin credenciales convertiría
+  // todos los cobros nuevos en un error, y el panel no tendría cómo volver.
+  it('no se puede elegir uno que no está montado', () => {
+    const r = new ProviderRegistry([fake('stripe')], 'stripe');
+    expect(() => r.fijarPorDefecto('adyen')).toThrow(ProviderNotAvailableError);
+    expect(r.porDefecto).toBe('stripe');
+  });
+
+  it('ponerlo al que ya está no hace nada', () => {
+    const r = new ProviderRegistry([fake('stripe')], 'stripe');
+    r.fijarPorDefecto('stripe');
+    expect(r.porDefecto).toBe('stripe');
+  });
+});

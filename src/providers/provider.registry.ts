@@ -46,14 +46,52 @@ export class ProviderRegistry {
   private readonly log = new Logger(ProviderRegistry.name);
   private readonly porNombre = new Map<ProviderName, PaymentProvider>();
 
+  /**
+   * El procesador por defecto, que **puede cambiar en caliente**.
+   *
+   * Se edita desde el panel, así que no puede quedarse fijado en el arranque:
+   * cambiarlo obligaría a redesplegar, que es justo lo que se quita de en
+   * medio. El valor del entorno es el inicial y el respaldo.
+   */
+  private porDefectoActual: ProviderName;
+
   constructor(
     @Inject(PAYMENT_PROVIDERS) providers: PaymentProvider[],
-    private readonly defaultProvider: ProviderName,
+    defaultProvider: ProviderName,
   ) {
     for (const p of providers) this.porNombre.set(p.name, p);
+    this.porDefectoActual = defaultProvider;
     this.log.log(
       `Procesadores registrados: ${[...this.porNombre.keys()].join(', ') || '(ninguno)'} · por defecto: ${defaultProvider}`,
     );
+  }
+
+  /** Cuál atiende los cobros nuevos ahora mismo. */
+  get porDefecto(): ProviderName {
+    return this.porDefectoActual;
+  }
+
+  /**
+   * Cambia el procesador de los cobros nuevos.
+   *
+   * No toca ningún cobro existente: la regla 1 sigue mandando y cada cobro
+   * vuelve al procesador que lo originó. Lo que cambia es a partir de cuándo.
+   *
+   * Se niega a elegir uno que no esté montado: dejar el servicio apuntando a un
+   * procesador sin credenciales convertiría todos los cobros nuevos en un error,
+   * y el panel no tendría forma de volver atrás.
+   */
+  fijarPorDefecto(nombre: ProviderName): void {
+    if (nombre === this.porDefectoActual) return;
+    const p = this.porNombre.get(nombre);
+    if (!p) {
+      throw new ProviderNotAvailableError(
+        `No se puede poner '${nombre}' por defecto: no está montado. Disponibles: ${this.disponibles().join(', ') || 'ninguno'}.`,
+      );
+    }
+    const antes = this.porDefectoActual;
+    this.porDefectoActual = nombre;
+    this.log.warn(`Los cobros NUEVOS pasan de '${antes}' a '${nombre}'. Los existentes siguen en el suyo.`);
   }
 
   /** Los que están montados ahora mismo. */
@@ -87,14 +125,14 @@ export class ProviderRegistry {
    * primero que sí. Sin nadie capaz, falla diciendo qué faltaba.
    */
   paraCobroNuevo(necesita: CapabilityNeeded[] = []): PaymentProvider {
-    const porDefecto = this.porNombre.get(this.defaultProvider);
+    const porDefecto = this.porNombre.get(this.porDefectoActual);
     if (porDefecto && necesita.every((c) => porDefecto.capabilities[c])) return porDefecto;
 
     for (const p of this.porNombre.values()) {
       if (necesita.every((c) => p.capabilities[c])) {
         if (porDefecto) {
           this.log.warn(
-            `'${this.defaultProvider}' no puede con [${necesita.join(', ')}]; se usa '${p.name}'.`,
+            `'${this.porDefectoActual}' no puede con [${necesita.join(', ')}]; se usa '${p.name}'.`,
           );
         }
         return p;

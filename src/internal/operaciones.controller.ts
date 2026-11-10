@@ -11,8 +11,9 @@
  * libro, y eso no lo hace cualquiera.
  */
 
-import { Body, Controller, HttpCode, Post, UseFilters, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, Post, UseFilters, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
+import { SettingsService, esProcesador, type RuteoGuardado } from '../config/settings.service';
 import { WebhooksService, type ResultadoDeAviso } from '../webhooks/webhooks.service';
 import { ReconciliationService } from '../reconciliation/reconciliation.service';
 import type { ResultadoDelCuadre } from '../reconciliation/cuadre';
@@ -21,6 +22,12 @@ import { FirmaGuard } from './firma.guard';
 
 const cuerpoDeReintento = z.object({
   limite: z.number().int().min(1).max(500).default(50),
+});
+
+const cuerpoDeRuteo = z.object({
+  defaultProvider: z.string().min(2).max(20),
+  /** Quién lo cambió. Lo pone urbont-api desde su sesión de admin. */
+  updatedBy: z.string().min(1).max(200),
 });
 
 const cuerpoDeCuadre = z.object({
@@ -36,7 +43,43 @@ export class OperacionesController {
   constructor(
     private readonly webhooks: WebhooksService,
     private readonly conciliacion: ReconciliationService,
+    private readonly settings: SettingsService,
   ) {}
+
+  /**
+   * Qué procesador atiende los cobros nuevos, y cuáles podría atenderlos.
+   *
+   * «Disponibles» son los que tienen credenciales montadas en esta instalación,
+   * no los que el contrato sabe nombrar: ofrecer en el panel uno sin
+   * credenciales sería ofrecer una forma de dejar de cobrar.
+   */
+  @Get('config')
+  async configVigente(): Promise<RuteoGuardado & { disponibles: string[] }> {
+    return { ...this.settings.vigente(), disponibles: this.settings.disponibles() };
+  }
+
+  /**
+   * Cambia el procesador de los cobros nuevos.
+   *
+   * No toca ningún cobro existente: cada uno vuelve al procesador que lo
+   * originó, que es la regla 1 del contrato. Lo que cambia es a partir de cuándo.
+   */
+  @Post('config/routing')
+  @HttpCode(200)
+  async cambiarRuteo(@Body() body: unknown): Promise<RuteoGuardado & { disponibles: string[] }> {
+    const datos = cuerpoDeRuteo.safeParse(body ?? {});
+    if (!datos.success) {
+      throw new BadRequestException({ error: 'INVALID_REQUEST', detalle: 'defaultProvider y updatedBy son obligatorios' });
+    }
+    if (!esProcesador(datos.data.defaultProvider)) {
+      throw new BadRequestException({ error: 'INVALID_REQUEST', detalle: 'ese procesador no existe' });
+    }
+    const guardado = await this.settings.guardar(
+      { defaultProvider: datos.data.defaultProvider },
+      datos.data.updatedBy,
+    );
+    return { ...guardado, disponibles: this.settings.disponibles() };
+  }
 
   /**
    * Vuelve a procesar los avisos que se guardaron y fallaron.

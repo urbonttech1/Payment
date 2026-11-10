@@ -2,6 +2,7 @@ import { Global, Module } from '@nestjs/common';
 import { LoggerModule } from 'nestjs-pino';
 import { crearPool, POOL } from './db/pool';
 import { CONFIG, cargarConfig, type Config } from './config/config';
+import { SettingsModule } from './config/settings.module';
 import { HealthModule } from './health/health.module';
 import { ProvidersModule } from './providers/providers.module';
 import { LedgerModule } from './ledger/ledger.module';
@@ -27,6 +28,7 @@ export { CONFIG };
     }),
     HealthModule,
     ProvidersModule,
+    SettingsModule,
     LedgerModule,
     PaymentsModule,
     SplitsModule,
