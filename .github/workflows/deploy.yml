@@ -68,11 +68,24 @@ jobs:
             --push .
           echo "IMAGEN=$IMAGEN" >> "$GITHUB_ENV"
 
+      # La base es la definición que ESTÁ VIVA en ECS, no `taskdef.json`.
+      #
+      # Las variables de entorno con secretos se ponen en AWS y no viven en el
+      # repositorio. Si el despliegue partiera del fichero, cada push las
+      # borraría —el servicio arrancaría sin DATABASE_URL y se caería— y el
+      # único aviso sería el servicio muerto. Partiendo de lo vivo, un push sólo
+      # cambia la imagen. `taskdef.json` sigue siendo la referencia de la forma
+      # (CPU, memoria, roles, sondas) y para registrar a mano un cambio de ésos.
+      - name: Traer la definición viva
+        run: |
+          aws ecs describe-task-definition --task-definition urbont-payments \
+            --query 'taskDefinition' --output json > taskdef-vivo.json
+
       - name: Registrar la definición de tarea
         id: taskdef
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
-          task-definition: taskdef.json
+          task-definition: taskdef-vivo.json
           container-name: payments
           image: ${{ env.IMAGEN }}
 

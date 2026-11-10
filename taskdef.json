@@ -1,7 +1,9 @@
 {
   "family": "urbont-payments",
   "networkMode": "awsvpc",
-  "requiresCompatibilities": ["FARGATE"],
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
   "cpu": "512",
   "memory": "1024",
   "runtimePlatform": {
@@ -16,32 +18,60 @@
       "image": "083414536603.dkr.ecr.us-east-1.amazonaws.com/urbont-payments:latest",
       "essential": true,
       "stopTimeout": 15,
-      "portMappings": [{ "containerPort": 8080, "protocol": "tcp" }],
-      "environment": [
-        { "name": "NODE_ENV", "value": "production" },
-        { "name": "PORT", "value": "8080" },
-        { "name": "LOG_LEVEL", "value": "info" },
-        { "name": "PAYMENT_PROVIDER", "value": "stripe" },
-        { "name": "URBONT_API_URL", "value": "https://api.urbont.com" },
-        { "name": "PLATFORM_COMMISSION_RATE", "value": "0.15" },
-        { "name": "STRIPE_TERMINAL_LOCATION_ID", "value": "" }
+      "portMappings": [
+        {
+          "containerPort": 8080,
+          "protocol": "tcp"
+        }
       ],
-      "secrets": [
+      "environment": [
+        {
+          "name": "NODE_ENV",
+          "value": "production"
+        },
+        {
+          "name": "PORT",
+          "value": "8080"
+        },
+        {
+          "name": "LOG_LEVEL",
+          "value": "info"
+        },
+        {
+          "name": "PAYMENT_PROVIDER",
+          "value": "stripe"
+        },
+        {
+          "name": "URBONT_API_URL",
+          "value": "https://api.urbont.com"
+        },
+        {
+          "name": "PLATFORM_COMMISSION_RATE",
+          "value": "0.15"
+        },
+        {
+          "name": "STRIPE_TERMINAL_LOCATION_ID",
+          "value": ""
+        },
         {
           "name": "DATABASE_URL",
-          "valueFrom": "arn:aws:secretsmanager:us-east-1:083414536603:secret:urbont/payments/DATABASE_URL"
+          "value": ""
         },
         {
           "name": "SERVICE_SHARED_SECRET",
-          "valueFrom": "arn:aws:secretsmanager:us-east-1:083414536603:secret:urbont/payments/SERVICE_SHARED_SECRET"
+          "value": ""
+        },
+        {
+          "name": "CREDENTIALS_KEY",
+          "value": ""
         },
         {
           "name": "STRIPE_SECRET_KEY",
-          "valueFrom": "arn:aws:secretsmanager:us-east-1:083414536603:secret:urbont/payments/STRIPE_SECRET_KEY"
+          "value": ""
         },
         {
           "name": "STRIPE_WEBHOOK_SECRET",
-          "valueFrom": "arn:aws:secretsmanager:us-east-1:083414536603:secret:urbont/payments/STRIPE_WEBHOOK_SECRET"
+          "value": ""
         }
       ],
       "healthCheck": {

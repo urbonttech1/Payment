@@ -1,9 +1,9 @@
 # URBONT PAYMENTS — imagen de producción
 #
-# A diferencia de urbont-api, aquí NO se copia ningún `.env`: los secretos los
-# inyecta ECS desde AWS Secrets Manager en el arranque (ver taskdef.json). Una
-# imagen con secretos dentro los deja en una capa inmutable que cualquiera con
-# `docker pull` puede leer, y en un servicio de pagos eso son las claves del
+# A diferencia de urbont-api, aquí NO se copia ningún `.env`: las variables las
+# inyecta ECS en el arranque, desde la definición de tarea (ver taskdef.json).
+# Una imagen con secretos dentro los deja en una capa inmutable que cualquiera
+# con `docker pull` puede leer, y en un servicio de pagos eso son las claves del
 # procesador.
 
 FROM node:22-alpine AS builder
