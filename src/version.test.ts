@@ -35,3 +35,4 @@ describe('la versión del servicio', () => {
     expect(VERSION).toMatch(/^\d+\.\d+\.\d+$/);
   });
 });
+
