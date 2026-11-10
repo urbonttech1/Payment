@@ -120,6 +120,11 @@ export class SettingsService implements OnModuleInit, OnModuleDestroy {
     return this.vigente();
   }
 
+  /** Vuelve a leer qué procesador atienden los cobros nuevos. */
+  aplicar(): Promise<void> {
+    return this.refrescar();
+  }
+
   private async refrescar(): Promise<void> {
     try {
       const { rows } = await this.pool.query<{ value: unknown; updated_by: string | null; updated_at: Date }>(
@@ -147,9 +152,9 @@ export class SettingsService implements OnModuleInit, OnModuleDestroy {
         try {
           this.registry.fijarPorDefecto(nombre);
         } catch (e) {
-          // El guardado apunta a un procesador que esta tarea no tiene montado
-          // (le falta la credencial). No se fuerza: se grita y se sigue con el
-          // que hay, que al menos cobra.
+          // El guardado apunta a un procesador que esta tarea todavía no montó.
+          // La credencial llega sola en el siguiente refresco; mientras, se
+          // sigue con el que hay, que al menos cobra.
           this.log.error(
             `La configuración pide '${nombre}' y esta tarea no lo tiene montado: sigue '${this.registry.porDefecto}'. ${
               e instanceof Error ? e.message : String(e)

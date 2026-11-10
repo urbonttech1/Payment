@@ -20,11 +20,12 @@
  *     procesador a nadie por una fila que alguien dejó a medias.
  */
 
-import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import type { Pool } from 'pg';
 import { POOL } from '../db/pool';
 import { CONFIG, type Config } from './config';
 import { ProviderRegistry } from '../providers/provider.registry';
+import { SettingsService } from './settings.service';
 import { crearStripeProvider } from '../providers/stripe/stripe.module';
 import { crearSquareProvider } from '../providers/square/square.module';
 import type { PaymentProvider, ProviderName } from '../providers/provider.port';
@@ -90,21 +91,39 @@ export class SinSoporteError extends Error {
   }
 }
 
+/** Lo mismo que el ruteo: dos tareas, y el cambio entra por una de ellas. */
+const REFRESCO_MS = 30_000;
+
 @Injectable()
-export class CredentialsService implements OnModuleInit {
+export class CredentialsService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger(CredentialsService.name);
   /** Las que vinieron del entorno al arrancar; no se pisan desde el panel. */
   private readonly delEntorno = new Set<ProviderName>();
+  /** `updated_at` de lo último que esta tarea montó, para no rehacerlo cada vuelta. */
+  private readonly montadoEn = new Map<string, string>();
+  private reloj: NodeJS.Timeout | null = null;
 
   constructor(
     @Inject(POOL) private readonly pool: Pool,
     @Inject(CONFIG) private readonly config: Config,
     private readonly registry: ProviderRegistry,
+    private readonly settings: SettingsService,
   ) {}
 
   async onModuleInit(): Promise<void> {
     for (const p of this.registry.disponibles()) this.delEntorno.add(p);
-    await this.montarLasGuardadas();
+    if (!this.cifradoDisponible) {
+      this.log.log('Sin CREDENTIALS_KEY: las pasarelas salen sólo de las variables de entorno.');
+    }
+    await this.sincronizar();
+    this.reloj = setInterval(() => {
+      void this.sincronizar();
+    }, REFRESCO_MS);
+    this.reloj.unref?.();
+  }
+
+  onModuleDestroy(): void {
+    if (this.reloj) clearInterval(this.reloj);
   }
 
   get cifradoDisponible(): boolean {
@@ -223,30 +242,40 @@ export class CredentialsService implements OnModuleInit {
     }
   }
 
-  /** Al arrancar: monta las pasarelas que el entorno no trae. */
-  private async montarLasGuardadas(): Promise<void> {
-    if (!this.cifradoDisponible) {
-      this.log.log('Sin CREDENTIALS_KEY: las pasarelas salen sólo de las variables de entorno.');
-      return;
-    }
+  /**
+   * Monta lo que el panel guardó y esta tarea todavía no tiene.
+   *
+   * Cada tarea lo hace sola, leyendo la base: guardar una clave en una no
+   * obliga a reiniciar el servicio para que la otra cobre con ella. Si no
+   * cambió `updated_at`, no se vuelve a montar.
+   */
+  private async sincronizar(): Promise<void> {
+    if (!this.cifradoDisponible) return;
     const clave = claveMaestra(this.config.CREDENTIALS_KEY);
+    let montoAlgo = false;
 
     for (const fila of await this.leerFilas()) {
       if (this.delEntorno.has(fila.provider)) continue;
+      const marca = fila.updated_at ? new Date(fila.updated_at).toISOString() : '';
+      if (this.montadoEn.get(fila.provider) === marca) continue;
       try {
         const valores = JSON.parse(descifrar(fila.secreto_cifrado, clave)) as Record<string, string>;
         const adaptador = this.construir(fila.provider, valores);
         if (!adaptador) continue;
         this.registry.montar(adaptador);
+        this.montadoEn.set(fila.provider, marca);
+        montoAlgo = true;
         this.log.log(`Pasarela '${fila.provider}' montada con las credenciales del panel.`);
       } catch (e) {
         // Una credencial que no se puede descifrar o montar no tumba el
-        // arranque: se grita y se sigue con las que haya.
+        // arranque: se grita y se reintenta en la siguiente vuelta.
         this.log.error(
           `No se pudo montar '${fila.provider}': ${e instanceof Error ? e.message : String(e)}`,
         );
       }
     }
+
+    if (montoAlgo) await this.settings.aplicar();
   }
 
   /**
