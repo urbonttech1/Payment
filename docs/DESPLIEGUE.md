@@ -28,7 +28,7 @@ registro de quién lo hizo ni desde qué commit no es auditable.
 ## Paso 1 — Secretos
 
 ```bash
-for nombre in DATABASE_URL SERVICE_SHARED_SECRET STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET; do
+for nombre in DATABASE_URL SERVICE_SHARED_SECRET STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET STRIPE_WEBHOOK_SECRET_CONNECT; do
   aws secretsmanager create-secret \
     --name "urbont/payments/$nombre" \
     --description "URBONT PAYMENTS — $nombre" \
@@ -48,6 +48,13 @@ aws secretsmanager put-secret-value \
 
 `DATABASE_URL` apunta al mismo Postgres de Supabase, pero con **un usuario
 propio** (paso 2).
+
+### Lo que NO es secreto y va en el taskdef
+
+`PLATFORM_COMMISSION_RATE` (0.15, que es lo que de verdad se cobra hoy) y
+`STRIPE_TERMINAL_LOCATION_ID`, la *location* de Stripe Terminal para Tap to Pay.
+Sin esa location el token del lector sale genérico: vale para el lector simulado
+y no para cobrar en un iPhone de verdad. Es la misma que ya usa `urbont-api`.
 
 ## Paso 2 — Usuario de base de datos
 

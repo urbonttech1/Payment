@@ -22,7 +22,9 @@
         { "name": "PORT", "value": "8080" },
         { "name": "LOG_LEVEL", "value": "info" },
         { "name": "PAYMENT_PROVIDER", "value": "stripe" },
-        { "name": "URBONT_API_URL", "value": "https://api.urbont.com" }
+        { "name": "URBONT_API_URL", "value": "https://api.urbont.com" },
+        { "name": "PLATFORM_COMMISSION_RATE", "value": "0.15" },
+        { "name": "STRIPE_TERMINAL_LOCATION_ID", "value": "" }
       ],
       "secrets": [
         {
