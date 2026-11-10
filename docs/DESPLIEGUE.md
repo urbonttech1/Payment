@@ -22,25 +22,28 @@ despliegues los hace GitHub Actions.
 | Grupo de seguridad | `urbont-payments-task-sg` (`sg-0c22b4af8e7a93b99`): entra el 8080 **sólo** desde el SG del ALB |
 | Target group | `urbont-payments-tg`, health check `/healthz` |
 | Regla del ALB | prioridad 20, host `payments.urbont.com` → el target group |
-| Certificado ACM | `payments.urbont.com`, **PENDING_VALIDATION** |
+| Certificado ACM | `payments.urbont.com`, **ISSUED** y añadido al listener |
+| DNS | `payments.urbont.com` → el ALB, en Spaceship |
 | Servicio ECS | `urbont-payments`, **2 tareas sanas**, revisión 6 |
 | Esquema `payments` | creado en el Supabase de producción por las migraciones del arranque |
 
-El servicio responde: `/healthz` da `{"status":"ok","checks":{"db":"ok"}}` por
-el ALB, y los dos destinos están `healthy`.
+**https://payments.urbont.com/healthz responde con certificado válido**, y los
+dos destinos están `healthy`. Autoescalado registrado: 2–6 tareas, CPU al 70%.
 
-**Lo que falta, y es de Felipe:**
+**Lo que falta:**
 
-1. **Dos registros DNS en Spaceship** (paso 5), que es donde vive `urbont.com`:
-   el CNAME de validación del certificado y el de `payments.urbont.com`. Hasta
-   entonces el servicio sólo se alcanza por el ALB con cabecera `Host`.
-2. **`PAYMENTS_SERVICE_URL` y `PAYMENTS_SERVICE_SECRET` en `urbont-api`**, con
-   el mismo valor de `SERVICE_SHARED_SECRET`, y redesplegarla. Hasta entonces
-   la API no sabe que el micro existe.
-3. **El usuario `urbont_payments` en Supabase** (paso 2). Ahora mismo el micro
+1. **Desplegar `urbont-api`.** Su `.env` ya lleva `PAYMENTS_SERVICE_URL` y
+   `PAYMENTS_SERVICE_SECRET`, pero ese fichero se hornea en la imagen, así que
+   hasta el próximo despliegue la API no sabe que el micro existe.
+2. **El usuario `urbont_payments` en Supabase** (paso 2). Ahora mismo el micro
    entra con el usuario `postgres`, que es más de lo que necesita.
-4. **El autoescalado** (paso 6), que no se registró para no forzar el mínimo de
-   tareas mientras el servicio no arrancaba.
+3. **Apuntar los webhooks de Stripe** a `payments.urbont.com/webhooks/stripe`.
+   Ese endpoint nuevo trae **su propio** secreto de firma, y es ése el que va en
+   `STRIPE_WEBHOOK_SECRET`: con el del endpoint viejo, el micro rechaza por
+   firma inválida todo lo que le llegue.
+4. **Encender algo desde el panel.** Todo sigue por el camino de siempre
+   mientras el interruptor esté apagado. La propina es el mejor primer flujo:
+   el de menos importe y el más aislado.
 
 ### Tres trampas que costaron un despliegue cada una
 
