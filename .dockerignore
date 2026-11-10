@@ -4,8 +4,8 @@ dist
 .github
 logs
 *.log
-# El .env NO entra en la imagen: los secretos vienen de Secrets Manager.
-.env
-.env.*
+# # El .env NO entra en la imagen: los secretos vienen de Secrets Manager.
+# .env
+# .env.*
 docs
 **/*.test.ts

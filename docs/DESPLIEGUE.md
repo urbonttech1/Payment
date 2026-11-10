@@ -23,22 +23,41 @@ despliegues los hace GitHub Actions.
 | Target group | `urbont-payments-tg`, health check `/healthz` |
 | Regla del ALB | prioridad 20, host `payments.urbont.com` → el target group |
 | Certificado ACM | `payments.urbont.com`, **PENDING_VALIDATION** |
-| Servicio ECS | `urbont-payments`, **0 tareas** |
+| Servicio ECS | `urbont-payments`, **2 tareas sanas**, revisión 6 |
+| Esquema `payments` | creado en el Supabase de producción por las migraciones del arranque |
+
+El servicio responde: `/healthz` da `{"status":"ok","checks":{"db":"ok"}}` por
+el ALB, y los dos destinos están `healthy`.
 
 **Lo que falta, y es de Felipe:**
 
-1. **Las cinco variables de entorno** del paso 1. Sin `DATABASE_URL` y
-   `SERVICE_SHARED_SECRET` el servicio se niega a arrancar a propósito, que es
-   por lo que está en 0 tareas y no reiniciándose en bucle.
-2. **El usuario `urbont_payments` en Supabase** (paso 2), que es de donde sale
-   `DATABASE_URL`.
-3. **Dos registros DNS en Spaceship** (paso 5), que es donde vive `urbont.com`:
-   el CNAME de validación del certificado y el de `payments.urbont.com`.
-4. **`PAYMENTS_SERVICE_URL` y `PAYMENTS_SERVICE_SECRET` en `urbont-api`**, con
+1. **Dos registros DNS en Spaceship** (paso 5), que es donde vive `urbont.com`:
+   el CNAME de validación del certificado y el de `payments.urbont.com`. Hasta
+   entonces el servicio sólo se alcanza por el ALB con cabecera `Host`.
+2. **`PAYMENTS_SERVICE_URL` y `PAYMENTS_SERVICE_SECRET` en `urbont-api`**, con
    el mismo valor de `SERVICE_SHARED_SECRET`, y redesplegarla. Hasta entonces
    la API no sabe que el micro existe.
+3. **El usuario `urbont_payments` en Supabase** (paso 2). Ahora mismo el micro
+   entra con el usuario `postgres`, que es más de lo que necesita.
+4. **El autoescalado** (paso 6), que no se registró para no forzar el mínimo de
+   tareas mientras el servicio no arrancaba.
 
-Después: subir a 2 tareas y registrar el autoescalado (paso 6).
+### Tres trampas que costaron un despliegue cada una
+
+- **El host directo de Supabase (`db.<ref>.supabase.co`) sólo resuelve a
+  IPv6**, y la VPC no tiene IPv6: desde Fargate da `ENETUNREACH`. Hay que ir
+  por el **pooler**, que sí tiene IPv4, y en **modo sesión (5432)**, no
+  transacción (6543), porque las migraciones usan sentencias preparadas.
+- **`sslmode=require` mata la conexión.** Desde pg 8.16 es un alias de
+  `verify-full`, y el certificado de Supabase no encadena con las CA del
+  sistema: `self-signed certificate in certificate chain`. Se escribe
+  `sslmode=no-verify`.
+- **El proyecto de Supabase está en `us-west-2`**, no en `us-east-1` donde
+  corre ECS. Con el pooler de la región equivocada, Supabase contesta
+  `tenant/user not found`, que no se parece en nada a «región equivocada». La
+  región se saca de la IPv6 del host directo contra `ip-ranges.amazonaws.com`.
+  Cada consulta cruza el país: ~57 ms de ida y vuelta, que es lo que marca
+  `latencyMs` en `/healthz`.
 
 ---
 

@@ -18,6 +18,12 @@ import { Pool, type PoolConfig } from 'pg';
  *
  * Por defecto va cifrado, con el certificado sin verificar: Supabase presenta
  * uno que no encadena con las CA del sistema.
+ *
+ * **En la cadena se escribe `sslmode=no-verify`, nunca `require`.** Desde pg
+ * 8.16 `require` es un alias de `verify-full`, y eso lo aplica el propio `pg`
+ * al parsear la cadena, por encima de lo que devuelva esta función: con
+ * `require`, la conexión a Supabase muere con «self-signed certificate in
+ * certificate chain». Costó un despliegue descubrirlo.
  */
 export function opcionesSsl(databaseUrl: string): PoolConfig['ssl'] {
   const modo = /[?&]sslmode=([^&]+)/.exec(databaseUrl)?.[1];
