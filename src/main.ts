@@ -1,11 +1,16 @@
 /**
  * Arranque de URBONT PAYMENTS.
  *
- * El orden importa: primero la configuración, después las migraciones y sólo
- * entonces se abre el puerto. Un servicio de pagos que acepta peticiones con el
- * esquema a medias deja cobros huérfanos.
+ * El orden importa: primero el `.env`, después la configuración, luego las
+ * migraciones y sólo entonces se abre el puerto. Un servicio de pagos que
+ * acepta peticiones con el esquema a medias deja cobros huérfanos.
  */
 
+// Sólo para desarrollo local: en producción no hay `.env` —el Dockerfile no lo
+// copia y ECS inyecta las variables directamente— así que esto no hace nada
+// salvo cuando se arranca a mano. Sin esto, `npm run dev` leía `process.env`
+// tal cual y el `.env` del repositorio no era más que un papel.
+import 'dotenv/config';
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { Logger } from 'nestjs-pino';
