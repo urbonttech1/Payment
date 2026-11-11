@@ -134,6 +134,25 @@ procesador antes de guardarse y se guardan cifradas. Lo único que hay que
 escribir en el servicio es su lista de campos (`CAMPOS` en
 `src/config/credentials.service.ts`) y el panel dibuja el formulario solo.
 
+## Desplegar
+
+```bash
+git push && docker build --platform linux/arm64 -t 083414536603.dkr.ecr.us-east-1.amazonaws.com/urbont-payments:latest . && docker push 083414536603.dkr.ecr.us-east-1.amazonaws.com/urbont-payments:latest && aws ecs update-service --cluster urbont --service urbont-payments --force-new-deployment --region us-east-1 --profile urbont
+```
+
+`--platform linux/arm64` no es opcional: las tareas corren en Fargate ARM64 y
+una imagen de otra arquitectura falla al arrancar, no al construir.
+
+Tarda unos dos minutos en relevar las dos tareas. Para comprobar qué quedó
+sirviendo, `curl -s https://payments.urbont.com/healthz` dice la versión.
+
+Para volver atrás, las revisiones viejas de la definición no se borran:
+
+```bash
+aws ecs update-service --cluster urbont --service urbont-payments \
+  --task-definition urbont-payments:7 --region us-east-1 --profile urbont
+```
+
 ## La versión
 
 Manda `src/version.ts`, una constante en el código. No se lee de
