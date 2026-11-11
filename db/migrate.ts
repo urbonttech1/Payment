@@ -6,11 +6,38 @@
  * alfabético; cada uno se registra para no repetirlo.
  */
 
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Pool } from 'pg';
 
-const DIRECTORIO = join(__dirname, 'migrations');
+/**
+ * Dónde están los `.sql`, probando por orden hasta dar con ellos.
+ *
+ *  1. Junto al compilado (`dist/db/migrations`). Es el caso del contenedor: el
+ *     Dockerfile los copia ahí aparte, sin depender del script de build.
+ *  2. El original del repositorio (`<raíz>/db/migrations`). Es el caso de
+ *     desarrollo, y existe porque `nest build` y `nest start --watch` borran
+ *     `dist` y recompilan **sin** copiar los `.sql`: sólo lo hace el último
+ *     paso de `npm run build`. Sin este respaldo, arrancar con `npm run dev`
+ *     moría con un ENOENT que no decía nada de lo que pasaba.
+ *
+ * Si no está en ninguno, se dice cuáles se miraron: un servicio de pagos que
+ * arranca sin su esquema es peor que uno que no arranca.
+ */
+function directorioDeMigraciones(): string {
+  const candidatos = [
+    join(__dirname, 'migrations'),
+    join(process.cwd(), 'db', 'migrations'),
+  ];
+  const encontrado = candidatos.find((d) => existsSync(d));
+  if (!encontrado) {
+    throw new Error(
+      `No encuentro las migraciones. Miré en:\n${candidatos.map((c) => `  · ${c}`).join('\n')}\n` +
+        'En local se arregla con `npm run build`, que es quien copia los .sql a dist.',
+    );
+  }
+  return encontrado;
+}
 
 export async function aplicarMigraciones(pool: Pool, log: (m: string) => void = console.log): Promise<number> {
   await pool.query(`
@@ -24,6 +51,7 @@ export async function aplicarMigraciones(pool: Pool, log: (m: string) => void = 
   const { rows } = await pool.query<{ nombre: string }>('SELECT nombre FROM payments.schema_migrations');
   const yaAplicadas = new Set(rows.map((r) => r.nombre));
 
+  const DIRECTORIO = directorioDeMigraciones();
   const ficheros = readdirSync(DIRECTORIO).filter((f) => f.endsWith('.sql')).sort();
   let aplicadas = 0;
 
