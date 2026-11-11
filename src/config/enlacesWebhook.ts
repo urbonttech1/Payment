@@ -38,18 +38,19 @@ export function enlacesDeWebhook(
   const url = urlVerificada || urlDeWebhook(basePublica, provider);
 
   if (provider === 'stripe') {
+    // Un solo enlace, aunque en Stripe se use dos veces. Enseñar la misma URL
+    // repetida parece un fallo de la pantalla, y lo que de verdad hay que
+    // saber no es que hay dos líneas: es que hay dos endpoints con secretos
+    // distintos, y eso cabe en la nota.
     return [
       {
-        id: 'cuenta',
-        etiqueta: 'Webhook de la cuenta',
+        id: 'stripe',
+        etiqueta: 'Webhook',
         url,
-        nota: 'Pégalo en el endpoint de la cuenta de Urbont. El secreto de ese endpoint es el de la cuenta.',
-      },
-      {
-        id: 'connect',
-        etiqueta: 'Webhook de Connect',
-        url,
-        nota: 'Mismo enlace, otro endpoint en Stripe: el de las cuentas de los choferes, con su propio secreto.',
+        nota:
+          'En Stripe se pega DOS veces, en dos endpoints distintos: el de la cuenta de Urbont y ' +
+          'el de Connect (las cuentas de los choferes). Cada uno trae su propio secreto, y los dos ' +
+          'van arriba, en las credenciales.',
       },
     ];
   }
