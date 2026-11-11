@@ -239,3 +239,9 @@ El procedimiento completo, paso a paso, está en
 - El usuario de base de datos sólo tiene permisos sobre el esquema `payments`.
 - Los webhooks se verifican con el cuerpo crudo; sin eso, la firma no vale nada.
 - Nada de datos de tarjeta toca este servicio: sólo referencias del procesador.
+
+
+
+
+push && docker build --platform linux/arm64 -t 083414536603.dkr.ecr.us-east-1.amazonaws.com/urbont-payments:latest . && docker push 083414536603.dkr.ecr.us-east-1.amazonaws.com/urbont-payments:latest && aws ecs update-service --cluster urbont --service urbont-payments \
+  --force-new-deployment --region us-east-1 --profile urbont
