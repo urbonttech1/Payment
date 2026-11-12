@@ -78,6 +78,7 @@ import {
 } from '../provider.port';
 import {
   centavos,
+  claveDeSquare,
   dinero,
   estadoDeCobro,
   moneda,
@@ -180,7 +181,7 @@ export class SquareProvider implements PaymentProvider {
     return this.traduciendoErrores(async () => {
       const { payment } = await this.square.payments.create({
         sourceId,
-        idempotencyKey: cmd.idempotencyKey,
+        idempotencyKey: claveDeSquare(cmd.idempotencyKey),
         amountMoney: dinero(cmd.amount, cmd.currency),
         locationId: this.opciones.locationId,
         // `false` retiene y se cobra después; `true` cobra en el acto. Es el
@@ -231,7 +232,7 @@ export class SquareProvider implements PaymentProvider {
           // Ajustar a 9000 y ajustar a 8000 son dos operaciones distintas: el
           // importe entra en la clave o el procesador devolvería el primer
           // ajuste al pedir el segundo.
-          idempotencyKey: `${cmd.idempotencyKey}_ajuste_${cmd.amount}`,
+          idempotencyKey: claveDeSquare(`${cmd.idempotencyKey}_ajuste_${cmd.amount}`),
         });
       }
 
@@ -242,7 +243,7 @@ export class SquareProvider implements PaymentProvider {
         // clave viaja de todas formas, en la cabecera, porque es lo que hace
         // que una llamada se pueda rastrear desde el libro hasta el registro de
         // peticiones de Square.
-        { headers: { 'Idempotency-Key': cmd.idempotencyKey } },
+        { headers: { 'Idempotency-Key': claveDeSquare(cmd.idempotencyKey) } },
       );
 
       const capturado = centavos(payment?.totalMoney?.amount ?? payment?.amountMoney?.amount);
@@ -280,7 +281,7 @@ export class SquareProvider implements PaymentProvider {
         // `amount` es el NUEVO TOTAL, no el incremento: lo dice el contrato y
         // es también lo que Square espera.
         payment: { amountMoney: dinero(cmd.amount, 'USD') },
-        idempotencyKey: cmd.idempotencyKey,
+        idempotencyKey: claveDeSquare(cmd.idempotencyKey),
       });
       return this.aAutorizacion(payment);
     });
@@ -290,7 +291,7 @@ export class SquareProvider implements PaymentProvider {
     await this.traduciendoErrores(async () => {
       await this.square.payments.cancel(
         { paymentId: cmd.providerRef },
-        { headers: { 'Idempotency-Key': cmd.idempotencyKey } },
+        { headers: { 'Idempotency-Key': claveDeSquare(cmd.idempotencyKey) } },
       );
     });
   }
@@ -302,7 +303,7 @@ export class SquareProvider implements PaymentProvider {
       const total = cmd.amount ?? (await this.importeDe(cmd.providerRef));
 
       const { refund } = await this.square.refunds.refundPayment({
-        idempotencyKey: cmd.idempotencyKey,
+        idempotencyKey: claveDeSquare(cmd.idempotencyKey),
         paymentId: cmd.providerRef,
         amountMoney: dinero(total, 'USD'),
         ...(cmd.reason ? { reason: cmd.reason } : {}),
@@ -355,7 +356,7 @@ export class SquareProvider implements PaymentProvider {
             referenceId: cmd.payerId,
             // La clave sale del pagador y no es aleatoria: un reintento tiene
             // que encontrar al mismo cliente, no crear otro.
-            idempotencyKey: `customer_${cmd.payerId}`,
+            idempotencyKey: claveDeSquare(`customer_${cmd.payerId}`),
             // Square EXIGE al menos uno de given_name, family_name,
             // company_name, email_address o phone_number. Con sólo
             // `referenceId` responde 400 y la tarjeta no se guarda nunca.
@@ -369,7 +370,7 @@ export class SquareProvider implements PaymentProvider {
       if (!customerRef) throw new Error('Square no devolvió el cliente al guardarlo');
 
       const r = await this.square.cards.create({
-        idempotencyKey: cmd.idempotencyKey,
+        idempotencyKey: claveDeSquare(cmd.idempotencyKey),
         sourceId: cmd.cardToken!,
         card: { customerId: customerRef },
       });

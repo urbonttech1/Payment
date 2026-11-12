@@ -65,6 +65,29 @@ export interface ArnesDeConformidad {
    */
   extras?: Partial<AuthorizeCommand>;
 
+  /**
+   * Lo más largo que admite su procesador como clave de idempotencia, o `null`
+   * si no la limita. **Es obligatorio a propósito.**
+   *
+   * Las claves de urbont-api miden entre 51 y 67 caracteres, y la suite las usa
+   * de ese tamaño. Square rechaza cualquiera de más de 45, y el adaptador las
+   * mandaba tal cual: en producción, una ristra de 502 y todos los cobros,
+   * capturas y reembolsos por Square rotos. No se había visto porque esta suite
+   * usaba claves de 26 caracteres, que caben en cualquier procesador, y por tanto
+   * ningún adaptador podía fallar por largo. Que sea un campo que hay que rellenar
+   * obliga a quien escriba el siguiente a hacerse la pregunta, en vez de
+   * descubrirla en producción.
+   */
+  limiteDeClave: number | null;
+
+  /**
+   * La clave tal como el adaptador se la manda al procesador. Por defecto, la
+   * misma. Un adaptador cuyo procesador limita el largo la acorta —de forma
+   * determinista, porque un reintento tiene que llegar con la misma clave— y el
+   * arnés dice aquí cómo.
+   */
+  claveEnviada?: (clave: string) => string;
+
   /** Monta el adaptador de forma que la siguiente llamada la rechace la tarjeta. */
   montarConRechazo(): PaymentProvider;
 
@@ -72,8 +95,18 @@ export interface ArnesDeConformidad {
   montarConFalloDelProcesador(): PaymentProvider;
 }
 
+/**
+ * Un viaje de verdad: tan largo como el UUID de los viajes reales, y por eso la
+ * clave resultante (`ride_<uuid>_authorize`) mide 51 caracteres, igual que la de
+ * urbont-api. Con una más corta esta suite no probaría nada sobre el largo.
+ */
+const VIAJE_REAL = '8e2d4a1b-5c3f-4a7e-9b1d-2f6c8e0a4b7d';
+const CLAVE_COBRO = `ride_${VIAJE_REAL}_authorize`;
+const CLAVE_CAPTURA = `${CLAVE_COBRO}_capture`;        // 59: lo que manda PaymentsService
+const CLAVE_REEMBOLSO = `${CLAVE_COBRO}_refund`;       // 58
+
 const COBRO: AuthorizeCommand = {
-  idempotencyKey: 'ride_conformidad_authorize',
+  idempotencyKey: CLAVE_COBRO,
   kind: 'ride',
   amount: 11000,
   currency: 'USD',
@@ -126,6 +159,8 @@ export function llevaLaClave(peticion: unknown, clave: string): boolean {
 }
 
 export function pruebasDeConformidad(arnes: ArnesDeConformidad): void {
+  /** La clave tal como tiene que llegar al procesador: la misma, o su forma acortada. */
+  const enviada = (clave: string): string => arnes.claveEnviada?.(clave) ?? clave;
   const cobro: AuthorizeCommand = { ...COBRO, ...(arnes.extras ?? {}) };
 
   describe(`${arnes.nombre} · conformidad con el contrato`, () => {
@@ -227,19 +262,42 @@ export function pruebasDeConformidad(arnes: ArnesDeConformidad): void {
       it('LA CLAVE DE IDEMPOTENCIA LLEGA AL PROCESADOR', async () => {
         const p = arnes.montar();
         await p.authorize(cobro);
-        expect(llevaLaClave(arnes.ultimaPeticion(), cobro.idempotencyKey)).toBe(true);
+        expect(llevaLaClave(arnes.ultimaPeticion(), enviada(cobro.idempotencyKey))).toBe(true);
+      });
+
+      // El fallo que costó una ristra de 502: las claves REALES miden 51–67 y
+      // Square rechaza más de 45.
+      it('LAS CLAVES REALES DE URBONT CABEN EN EL LÍMITE DE SU PROCESADOR', async () => {
+        const limite = arnes.limiteDeClave;
+        if (limite === null) return; // un procesador que no limita el largo
+        for (const clave of [CLAVE_COBRO, CLAVE_CAPTURA, CLAVE_REEMBOLSO]) {
+          expect(clave.length, 'la suite tiene que usar claves de tamaño real').toBeGreaterThanOrEqual(51);
+          const llega = enviada(clave);
+          expect(
+            llega.length,
+            `«${clave}» (${clave.length}) llega como «${llega}» (${llega.length}) y su procesador sólo admite ${limite}`,
+          ).toBeLessThanOrEqual(limite);
+        }
+      });
+
+      // Acortar mal es peor que no acortar: un reintento tiene que llegar con la
+      // misma clave, y dos operaciones distintas no pueden compartirla.
+      it('LA CLAVE QUE LLEGA ES ESTABLE Y NO CONFUNDE OPERACIONES', () => {
+        expect(enviada(CLAVE_COBRO)).toBe(enviada(CLAVE_COBRO));
+        const tres = new Set([enviada(CLAVE_COBRO), enviada(CLAVE_CAPTURA), enviada(CLAVE_REEMBOLSO)]);
+        expect(tres.size).toBe(3);
       });
 
       it('y también al capturar', async () => {
         const p = arnes.montar();
-        await p.capture({ idempotencyKey: 'ride_conformidad_capture', providerRef: 'ref_1' });
-        expect(llevaLaClave(arnes.ultimaPeticion(), 'ride_conformidad_capture')).toBe(true);
+        await p.capture({ idempotencyKey: CLAVE_CAPTURA, providerRef: 'ref_1' });
+        expect(llevaLaClave(arnes.ultimaPeticion(), enviada(CLAVE_CAPTURA))).toBe(true);
       });
 
       it('y al reembolsar', async () => {
         const p = arnes.montar();
-        await p.refund({ idempotencyKey: 'ride_conformidad_refund', providerRef: 'ref_1' });
-        expect(llevaLaClave(arnes.ultimaPeticion(), 'ride_conformidad_refund')).toBe(true);
+        await p.refund({ idempotencyKey: CLAVE_REEMBOLSO, providerRef: 'ref_1' });
+        expect(llevaLaClave(arnes.ultimaPeticion(), enviada(CLAVE_REEMBOLSO))).toBe(true);
       });
     });
 
@@ -285,7 +343,7 @@ export function pruebasDeConformidad(arnes: ArnesDeConformidad): void {
         const p = arnes.montar();
         if (!p.capabilities.tapToPay || !p.presentCharge) return;
         await p.presentCharge({ ...cobro, hold: false });
-        expect(llevaLaClave(arnes.ultimaPeticion(), cobro.idempotencyKey)).toBe(true);
+        expect(llevaLaClave(arnes.ultimaPeticion(), enviada(cobro.idempotencyKey))).toBe(true);
       });
 
       it('el token del lector viene firmado por su procesador', async () => {

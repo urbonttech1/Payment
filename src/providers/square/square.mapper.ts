@@ -5,8 +5,46 @@
  * Si mañana cambian, cambia este archivo y nada más.
  */
 
+import { createHash } from 'node:crypto';
 import type { Currency as MonedaDeSquare } from 'square';
 import type { Cents, Currency, AuthorizationStatus, ProviderEventType } from '../provider.port';
+
+/**
+ * Lo más largo que admite Square como clave de idempotencia.
+ *
+ * Con una más larga responde `INVALID_REQUEST_ERROR: Field must not be greater
+ * than 45 length`. Las que genera urbont-api pasan de ahí —`ride_<uuid>_authorize`
+ * son 51 caracteres, y con `_capture` o `_refund` unos 59—, así que sin acortarlas
+ * ningún cobro, captura, reembolso ni tarjeta guardada por Square habría llegado a
+ * hacerse. Se vio en producción como una ristra de 502 en `POST /internal/cards`.
+ */
+export const LIMITE_CLAVE_SQUARE = 45;
+
+/** Marca lo acortado: `h1` = hash, versión 1. Si algún día cambia el esquema, cambia el número. */
+const MARCA_DE_CLAVE_ACORTADA = 'h1_';
+
+/**
+ * La clave tal como se la manda a Square: la misma si cabe, y un hash si no.
+ *
+ * **Tiene que ser determinista**, y lo es: la misma entrada da siempre la misma
+ * salida. La idempotencia consiste justo en eso —un reintento del mismo cobro
+ * llega con la misma clave, y Square lo reconoce en vez de cobrar otra vez—, así
+ * que una clave acortada al azar sería peor que no acortarla.
+ *
+ * Es SHA-256 en base64url y no un corte de los primeros caracteres: las claves se
+ * parecen mucho entre sí (`ride_<uuid>_authorize` frente a `…_capture`), y
+ * cortarlas por el final haría chocar las operaciones de un mismo viaje, que es
+ * exactamente lo que la clave tiene que evitar. 42 caracteres de base64url son 252
+ * bits: no hay riesgo práctico de que dos claves distintas den la misma.
+ *
+ * Lo que ya cabe se deja intacto. No hay motivo para tocarlo, y así lo que ya se
+ * mandó a Square con una clave corta sigue siendo reconocible.
+ */
+export function claveDeSquare(clave: string): string {
+  if (clave.length <= LIMITE_CLAVE_SQUARE) return clave;
+  const hash = createHash('sha256').update(clave).digest('base64url');
+  return `${MARCA_DE_CLAVE_ACORTADA}${hash.slice(0, LIMITE_CLAVE_SQUARE - MARCA_DE_CLAVE_ACORTADA.length)}`;
+}
 
 /** Square cuenta el dinero en la unidad mínima, pero con `bigint`. */
 export function centavos(amount: bigint | number | null | undefined): Cents {

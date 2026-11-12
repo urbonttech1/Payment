@@ -67,6 +67,8 @@ function falloDeStripe(): Error {
 
 const arnes: ArnesDeConformidad = {
   nombre: 'Stripe',
+  // Stripe admite claves de hasta 255 caracteres: las de urbont-api caben tal cual.
+  limiteDeClave: 255,
   montar: (): PaymentProvider => new StripeProvider(stripeFalso(), ['whsec_test']),
   ultimaPeticion: () => ultima,
   montarConRechazo: (): PaymentProvider => new StripeProvider(stripeFalso(rechazoDeTarjeta()), ['whsec_test']),

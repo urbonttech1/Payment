@@ -14,6 +14,7 @@ import { SquareError } from 'square';
 import type { PaymentProvider } from '../provider.port';
 import { pruebasDeConformidad, type ArnesDeConformidad } from '../conformidad';
 import { SquareProvider } from './square.provider';
+import { LIMITE_CLAVE_SQUARE, claveDeSquare } from './square.mapper';
 import type { SquareClient } from 'square';
 
 /** Lo último que se le pidió a Square: cuerpo y opciones, sin interpretar. */
@@ -77,6 +78,10 @@ const OPCIONES = {
 
 const arnes: ArnesDeConformidad = {
   nombre: 'Square',
+  // Square rechaza claves de más de 45 caracteres y las de urbont-api miden 51–67:
+  // el adaptador las acorta con un hash determinista.
+  limiteDeClave: LIMITE_CLAVE_SQUARE,
+  claveEnviada: claveDeSquare,
   montar: (): PaymentProvider => new SquareProvider(squareFalso(), OPCIONES),
   ultimaPeticion: () => ultima,
   // Square no tiene cobro que la app confirme después: el token de la tarjeta
