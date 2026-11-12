@@ -22,12 +22,17 @@
  *     algo que nadie podrá confirmar. **La app de URBONT no manda ese token
  *     hoy**, así que el cobro del viaje por Square necesita cambio de app.
  *
- *  3. **No se pueden dar de alta tarjetas desde el servidor.** `cards.create`
- *     también necesita un token de la app, así que `savedCards: false`: cobrar
- *     una propina contra una tarjeta guardada sigue siendo cosa de Stripe. Y es
- *     lo correcto por otro motivo: **una tarjeta pertenece al procesador que la
- *     guardó**, y hoy el registro elige por capacidad, no por el dueño de la
- *     tarjeta (ver la nota de `chargeSavedCard`).
+ *  3. **Guardar una tarjeta también va al revés.** `cards.create` necesita el
+ *     token de la app, así que no hay nada que la app confirme después: la
+ *     tarjeta queda guardada en la misma llamada. Por eso el contrato devuelve
+ *     una unión y no un `clientSecret`, que es puro Stripe.
+ *
+ *     ⚠️ Con `savedCards: true` se activa una deuda que hasta ahora no podía
+ *     hacer daño: **una tarjeta pertenece al procesador que la guardó**, y el
+ *     registro todavía elige por capacidad, no por dueño. Con dos procesadores
+ *     que guardan tarjetas, una de Square puede acabar presentada a Stripe.
+ *     Hay que enrutar por dueño antes de encender los dos a la vez (ver la
+ *     nota de `chargeSavedCard`).
  *
  *  4. **Capturar y subir el importe son la misma llamada.** Square no acepta
  *     importe al completar un pago: lo que se hace es actualizar el importe
@@ -57,6 +62,7 @@ import type {
   ProviderName,
   Refund,
   RefundCommand,
+  ResultadoDeGuardado,
   SaveCardCommand,
   SavedCard,
   SettlementCharge,
@@ -121,7 +127,8 @@ export class SquareProvider implements PaymentProvider {
     manualCapture: true,
     partialCapture: true,
     increaseAuthorization: true,
-    savedCards: false,
+    // Puede, pero sólo con el token que la app genera: ver `saveCard`.
+    savedCards: true,
     payouts: false,
     splitAtCapture: false,
     tapToPay: false,
@@ -153,17 +160,17 @@ export class SquareProvider implements PaymentProvider {
   /**
    * Cobra contra una tarjeta ya guardada **en Square**.
    *
-   * Funciona, pero `savedCards` está en `false` y no es una contradicción: por
-   * aquí no se puede guardar ninguna, así que el único modo de llegar con un
-   * `cardRef` de Square es haberlo guardado por fuera.
+   * ⚠️ **Esto ya no es seguro con los dos procesadores montados a la vez.**
    *
-   * Y hay un aviso que vale para cualquier procesador que venga después: **la
-   * tarjeta pertenece al procesador que la guardó.** Hoy el registro elige el
-   * procesador de un cobro con tarjeta guardada por capacidad
-   * (`paraCobroNuevo(['savedCards'])`), no por quién guardó la tarjeta; con dos
-   * procesadores montados eso puede mandar una tarjeta de Stripe a Square. Con
-   * `savedCards: false` aquí no pasa, pero el día que haya dos procesadores que
-   * guarden tarjetas, esa elección tiene que ser por dueño de la tarjeta.
+   * La regla es que **la tarjeta pertenece al procesador que la guardó**. El
+   * registro todavía elige el procesador de un cobro con tarjeta guardada por
+   * capacidad (`paraCobroNuevo(['savedCards'])`), no por quién la guardó.
+   * Mientras Square tenía `savedCards: false` eso no podía hacer daño: no había
+   * tarjetas suyas. Desde que sabe guardarlas, sí lo hay — una tarjeta de
+   * Square puede acabar presentada a Stripe, y el cobro se cae.
+   *
+   * Lo que falta: guardar el procesador de cada tarjeta y enrutar por él. Hasta
+   * entonces, no montar Stripe y Square guardando tarjetas al mismo tiempo.
    */
   async chargeSavedCard(cmd: ChargeSavedCardCommand): Promise<Authorization> {
     return this.cobrar(cmd, cmd.cardRef);
@@ -318,13 +325,67 @@ export class SquareProvider implements PaymentProvider {
 
   // ── Tarjetas guardadas ────────────────────────────────────────────────────
 
-  async saveCard(cmd: SaveCardCommand): Promise<{ clientSecret: string; customerRef: string }> {
-    throw new OperacionNoSoportadaError(
-      this.name,
-      'guardar una tarjeta desde el servidor',
-      'la app tokeniza con el SDK de Square y el servidor guarda ese token con cards.create; ' +
-        `no hay un secreto de cliente que devolver (pagador ${cmd.payerId})`,
-    );
+  /**
+   * Guarda una tarjeta que **la app ya tokenizó**.
+   *
+   * Aquí está la diferencia de fondo con Stripe: no hay nada que la app
+   * confirme después. Square necesita el token por delante y, con él, la
+   * tarjeta queda guardada en la misma llamada. Por eso el contrato devuelve
+   * una unión y no un `clientSecret`: inventar uno aquí sería mentir.
+   *
+   * Sin `cardToken` se niega en voz alta en vez de crear un cliente huérfano:
+   * un `customers.create` sin tarjeta detrás deja basura en Square que nadie
+   * vuelve a mirar.
+   */
+  async saveCard(cmd: SaveCardCommand): Promise<ResultadoDeGuardado> {
+    if (!cmd.cardToken) {
+      throw new OperacionNoSoportadaError(
+        this.name,
+        'guardar una tarjeta sin token',
+        'la app tiene que tokenizar con el SDK de Square y mandar ese token en cardToken; ' +
+          `Square no tiene un secreto que la app confirme después (pagador ${cmd.payerId})`,
+      );
+    }
+
+    return this.traduciendoErrores(async () => {
+      const customerRef =
+        cmd.customerRef ??
+        (
+          await this.square.customers.create({
+            referenceId: cmd.payerId,
+            // La clave sale del pagador y no es aleatoria: un reintento tiene
+            // que encontrar al mismo cliente, no crear otro.
+            idempotencyKey: `customer_${cmd.payerId}`,
+          })
+        ).customer?.id;
+
+      if (!customerRef) throw new Error('Square no devolvió el cliente al guardarlo');
+
+      const r = await this.square.cards.create({
+        idempotencyKey: cmd.idempotencyKey,
+        sourceId: cmd.cardToken!,
+        card: { customerId: customerRef },
+      });
+
+      const c = r.card;
+      if (!c?.id) throw new Error('Square no devolvió la tarjeta guardada');
+
+      return {
+        modo: 'guardada' as const,
+        customerRef,
+        card: {
+          providerRef: c.id,
+          provider: this.name,
+          brand: c.cardBrand ?? 'unknown',
+          last4: c.last4 ?? '',
+          expMonth: Number(c.expMonth ?? 0),
+          expYear: Number(c.expYear ?? 0),
+          // Square no tiene concepto de tarjeta por defecto: quien la elige es
+          // URBONT, en su propia tabla. Decir `true` aquí sería inventarlo.
+          isDefault: false,
+        },
+      };
+    });
   }
 
   async listCards(customerRef: string): Promise<SavedCard[]> {

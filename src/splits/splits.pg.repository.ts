@@ -2,7 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import type { Pool } from 'pg';
 import { POOL } from '../db/pool';
 import type { ProviderName } from '../providers/provider.port';
-import type { NuevaParte, Split, SplitsRepository } from './splits.repository';
+import type { NuevaParte, SaldoPorPagar, Split, SplitsRepository } from './splits.repository';
 
 interface Fila {
   id: string;
@@ -19,11 +19,14 @@ interface Fila {
   memo: string | null;
   paid_at: Date | null;
   created_at: Date;
+  settlement_mode: string;
+  payout_id: string | null;
 }
 
 const COLUMNAS = `
   id, transaction_id, beneficiary_type, beneficiary_id, amount_cents, deduction_cents,
-  rate, status, provider, provider_transfer_ref, failure_code, memo, paid_at, created_at
+  rate, status, provider, provider_transfer_ref, failure_code, memo, paid_at, created_at,
+  settlement_mode, payout_id
 `;
 
 function aSplit(f: Fila): Split {
@@ -44,6 +47,8 @@ function aSplit(f: Fila): Split {
     memo: f.memo,
     paidAt: f.paid_at,
     createdAt: f.created_at,
+    settlementMode: f.settlement_mode as Split['settlementMode'],
+    payoutId: f.payout_id,
   };
 }
 
@@ -67,13 +72,15 @@ export class PgSplitsRepository implements SplitsRepository {
         p.deductionCents ?? 0,
         p.rate ?? null,
         p.memo ?? null,
+        p.settlementMode ?? 'provider',
       );
-      return `($1, $${i + 1}, $${i + 2}::uuid, $${i + 3}::int, $${i + 4}::int, $${i + 5}::numeric, $${i + 6})`;
+      return `($1, $${i + 1}, $${i + 2}::uuid, $${i + 3}::int, $${i + 4}::int, $${i + 5}::numeric, $${i + 6}, $${i + 7})`;
     });
 
     await this.pool.query(
       `INSERT INTO payments.splits
-         (transaction_id, beneficiary_type, beneficiary_id, amount_cents, deduction_cents, rate, memo)
+         (transaction_id, beneficiary_type, beneficiary_id, amount_cents, deduction_cents, rate, memo,
+          settlement_mode)
        VALUES ${tuplas.join(', ')}
        ON CONFLICT DO NOTHING`,
       valores,
@@ -109,6 +116,60 @@ export class PgSplitsRepository implements SplitsRepository {
         WHERE id=$1 RETURNING ${COLUMNAS}`,
       [id, codigo.slice(0, 200)],
     );
+  }
+
+  // ── Liquidación manual ──────────────────────────────────────────────────
+
+  async saldos(): Promise<SaldoPorPagar[]> {
+    const { rows } = await this.pool.query<{
+      payee_type: string; payee_id: string; partes_pendientes: string;
+      total_cents: string; desde: Date; hasta: Date;
+    }>(`SELECT payee_type, payee_id, partes_pendientes, total_cents, desde, hasta
+          FROM payments.saldos_por_pagar
+         WHERE payee_id IS NOT NULL
+         ORDER BY total_cents DESC`);
+
+    return rows.map((f) => ({
+      payeeType: f.payee_type as SaldoPorPagar['payeeType'],
+      payeeId: f.payee_id,
+      // COUNT y SUM vuelven como cadena en pg: un BIGINT no cabe en un number
+      // sin pérdida, y aunque estos importes sí quepan, dejarlos como cadena
+      // haría que se sumaran concatenando en cuanto alguien los use.
+      partesPendientes: Number(f.partes_pendientes),
+      totalCents: Number(f.total_cents),
+      desde: f.desde,
+      hasta: f.hasta,
+    }));
+  }
+
+  async pendientesDe(payeeType: string, payeeId: string): Promise<Split[]> {
+    const { rows } = await this.pool.query<Fila>(
+      `SELECT ${COLUMNAS} FROM payments.splits
+        WHERE beneficiary_type = $1 AND beneficiary_id = $2::uuid
+          AND status IN ('pending','failed') AND amount_cents > 0
+        ORDER BY created_at`,
+      [payeeType, payeeId],
+    );
+    return rows.map(aSplit);
+  }
+
+  async marcarPagadasAMano(ids: string[], payoutId: string): Promise<Split[]> {
+    if (ids.length === 0) return [];
+
+    // El `status IN ('pending','failed')` del WHERE no es decoración: es lo que
+    // hace que dos personas pagando a la vez no marquen la misma parte dos
+    // veces. La que llegue segunda no actualiza nada y no vuelve aquí, y quien
+    // llama lo nota porque el importe no cuadra.
+    const { rows } = await this.pool.query<Fila>(
+      `UPDATE payments.splits
+          SET status='paid', payout_id=$2::uuid, paid_at=NOW(), updated_at=NOW(),
+              failure_code=NULL
+        WHERE id = ANY($1::uuid[])
+          AND status IN ('pending','failed')
+        RETURNING ${COLUMNAS}`,
+      [ids, payoutId],
+    );
+    return rows.map(aSplit);
   }
 
   private async actualizar(sql: string, params: unknown[]): Promise<Split> {

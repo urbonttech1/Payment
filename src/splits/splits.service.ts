@@ -42,7 +42,13 @@ import {
   type NuevoAsiento,
 } from '../ledger/entries.repository';
 import { PAYEES_REPOSITORY, type PayeesRepository, type TipoDePersona } from '../payees/payees.repository';
-import { SPLITS_REPOSITORY, type NuevaParte, type Split, type SplitsRepository } from './splits.repository';
+import {
+  SPLITS_REPOSITORY,
+  type ModoDeLiquidacion,
+  type NuevaParte,
+  type Split,
+  type SplitsRepository,
+} from './splits.repository';
 import { calcularReparto, sumaDelReparto, type TipoDeBeneficiario } from './reparto';
 import type { Cents, PaymentProvider, ProviderName } from '../providers/provider.port';
 
@@ -125,6 +131,13 @@ export class SplitsService {
     @Inject(ENTRIES_REPOSITORY) private readonly asientos: EntriesRepository,
     /** La comisión que se aplica si quien llama no pasa una. */
     private readonly comisionPorDefecto: number,
+    /**
+     * Cómo se salda el reparto. Ver `SETTLEMENT_MODE` en la configuración.
+     *
+     * Por defecto `provider`, que es lo que había antes de que esto existiera:
+     * añadir el parámetro no cambia el comportamiento de nadie que no lo pase.
+     */
+    private readonly modo: ModoDeLiquidacion = 'provider',
   ) {}
 
   async liquidar(chargeKey: string, p: PeticionDeReparto): Promise<ResultadoDeReparto> {
@@ -212,7 +225,13 @@ export class SplitsService {
       };
     }
 
-    const filas = await this.partes.crearSiNoExisten(tx.id, nuevas);
+    const filas = await this.partes.crearSiNoExisten(
+      tx.id,
+      // El modo se graba en la fila, no sólo en la configuración: cambiar el
+      // ajuste mañana no puede reescribir cómo se acordó pagar un reparto que
+      // ya está hecho.
+      nuevas.map((n) => ({ ...n, settlementMode: this.modo })),
+    );
     await this.asentarElReparto(tx, filas);
 
     const liquidadas = await this.pagar(chargeKey, tx, filas, porTipo);
@@ -263,6 +282,20 @@ export class SplitsService {
 
       if (fila.amountCents === 0) {
         resultado.push(await this.partes.marcarPagada(fila.id, tx.provider, null));
+        continue;
+      }
+
+      // Liquidación manual: no hay nada que transferir desde aquí. El dinero
+      // entero está en la cuenta de URBONT y lo reparte una persona por banco,
+      // una o dos veces por semana. La parte se queda `pending` —apuntada y
+      // visible en el panel de pagos— hasta que esa persona la marque.
+      //
+      // Es `pending` y no un estado nuevo a propósito: para el libro, una deuda
+      // sin pagar es lo mismo la pague una API o la pague alguien a mano, y
+      // añadir un estado obligaría a revisar cada consulta que hoy pregunta por
+      // lo que falta por pagar.
+      if (fila.settlementMode === 'manual') {
+        resultado.push(fila);
         continue;
       }
 

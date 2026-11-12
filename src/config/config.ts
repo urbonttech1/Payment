@@ -42,6 +42,27 @@ const esquema = z.object({
    */
   CREDENTIALS_KEY: z.string().optional(),
 
+  /**
+   * Cómo se le paga a choferes y valets.
+   *
+   *  · `provider` — el procesador transfiere, como hace Stripe Connect.
+   *  · `manual`   — el procesador deposita todo en la cuenta de URBONT, el
+   *    libro apunta lo que se le debe a cada uno, y una persona transfiere
+   *    desde el banco una o dos veces por semana y lo marca en el panel.
+   *
+   * Con Square no hay elección: no sabe pagarle a terceros. Pero esto es
+   * configuración y no una consecuencia del procesador a propósito, porque el
+   * modo lo decide el negocio: se puede querer liquidación manual con un
+   * procesador que sí sabría transferir.
+   *
+   * Por defecto `provider`, que es lo que hay desplegado: poner esta variable
+   * es lo que cambia el comportamiento, nunca desplegar.
+   */
+  SETTLEMENT_MODE: z.preprocess(
+    (v) => (v === '' || v === undefined ? 'provider' : v),
+    z.enum(['provider', 'manual']),
+  ),
+
   /** Secreto compartido con urbont-api para firmar las llamadas entre servicios. */
   SERVICE_SHARED_SECRET: z.string().min(16, 'SERVICE_SHARED_SECRET debe tener al menos 16 caracteres'),
 

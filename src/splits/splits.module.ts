@@ -24,7 +24,10 @@ import { SplitsService } from './splits.service';
         beneficiarios: PayeesRepository,
         asientos: EntriesRepository,
         config: Config,
-      ) => new SplitsService(registry, transacciones, partes, beneficiarios, asientos, config.PLATFORM_COMMISSION_RATE),
+      ) => new SplitsService(
+        registry, transacciones, partes, beneficiarios, asientos,
+        config.PLATFORM_COMMISSION_RATE, config.SETTLEMENT_MODE,
+      ),
     },
   ],
   exports: [SplitsService, SPLITS_REPOSITORY],

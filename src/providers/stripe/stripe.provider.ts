@@ -38,6 +38,7 @@ import type {
   ProviderName,
   Refund,
   RefundCommand,
+  ResultadoDeGuardado,
   SaveCardCommand,
   SavedCard,
   SettlementCharge,
@@ -214,7 +215,7 @@ export class StripeProvider implements PaymentProvider {
 
   // ── Tarjetas guardadas ────────────────────────────────────────────────────
 
-  async saveCard(cmd: SaveCardCommand): Promise<{ clientSecret: string; customerRef: string }> {
+  async saveCard(cmd: SaveCardCommand): Promise<ResultadoDeGuardado> {
     return this.traduciendoErrores(async () => {
       const customerRef =
         cmd.customerRef ??
@@ -231,7 +232,10 @@ export class StripeProvider implements PaymentProvider {
       );
 
       if (!si.client_secret) throw new Error('Stripe no devolvió client_secret al guardar la tarjeta');
-      return { clientSecret: si.client_secret, customerRef };
+      // La tarjeta todavía NO está guardada: lo estará cuando la app confirme
+      // este secreto. Decirlo con el modo evita que alguien dé por hecho que
+      // ya puede cobrar contra ella.
+      return { modo: 'confirmar-en-cliente', clientSecret: si.client_secret, customerRef };
     });
   }
 

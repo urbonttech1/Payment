@@ -263,7 +263,33 @@ export interface SaveCardCommand {
   idempotencyKey: string;
   customerRef?: string;
   payerId: string;
+  /**
+   * El token que la app generó al tokenizar la tarjeta.
+   *
+   * Opcional porque los dos procesadores lo resuelven al revés: Stripe crea un
+   * `SetupIntent` en el servidor y la app lo confirma después, así que no
+   * necesita token; Square exige que la app tokenice primero y manda ese token
+   * a `cards.create`, así que sin él no puede guardar nada.
+   *
+   * Un adaptador que lo necesite y no lo reciba **se niega en voz alta** en vez
+   * de guardar algo a medias.
+   */
+  cardToken?: string;
 }
+
+/**
+ * Cómo termina de guardarse una tarjeta.
+ *
+ * Es una unión discriminada y no un objeto con campos opcionales a propósito:
+ * los dos procesadores acaban en sitios opuestos, y quien llama tiene que
+ * tratar los dos casos. Con campos opcionales, un `clientSecret` indefinido se
+ * colaría hasta la app y fallaría allí, lejos de donde se decidió.
+ */
+export type ResultadoDeGuardado =
+  /** Falta un paso en el cliente: la app confirma con este secreto. (Stripe) */
+  | { modo: 'confirmar-en-cliente'; clientSecret: string; customerRef: string }
+  /** Ya está guardada: la app tokenizó antes y el servidor sólo la registró. (Square) */
+  | { modo: 'guardada'; card: SavedCard; customerRef: string };
 
 export interface ChargeSavedCardCommand extends AuthorizeCommand {
   cardRef: string;
@@ -368,7 +394,7 @@ export interface PaymentProvider {
   voidAuthorization(cmd: VoidCommand): Promise<void>;
   refund(cmd: RefundCommand): Promise<Refund>;
 
-  saveCard(cmd: SaveCardCommand): Promise<{ clientSecret: string; customerRef: string }>;
+  saveCard(cmd: SaveCardCommand): Promise<ResultadoDeGuardado>;
   listCards(customerRef: string): Promise<SavedCard[]>;
 
   /**

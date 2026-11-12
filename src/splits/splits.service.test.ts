@@ -63,9 +63,30 @@ class RepartoEnMemoria implements SplitsRepository {
         memo: p.memo ?? null,
         paidAt: null,
         createdAt: new Date(),
+        settlementMode: p.settlementMode ?? 'provider',
+        payoutId: null,
       });
     }
     return this.porTransaccion(transactionId);
+  }
+
+  // Liquidación manual: el servicio del reparto no los usa, pero el doble
+  // tiene que implementar el contrato entero.
+  async saldos(): Promise<never[]> { return []; }
+  async pendientesDe(): Promise<Split[]> {
+    return this.filas.filter((f) => f.status === 'pending' || f.status === 'failed');
+  }
+  async marcarPagadasAMano(ids: string[], payoutId: string): Promise<Split[]> {
+    const tocadas: Split[] = [];
+    for (const f of this.filas) {
+      if (!ids.includes(f.id)) continue;
+      if (f.status !== 'pending' && f.status !== 'failed') continue;
+      f.status = 'paid';
+      f.payoutId = payoutId;
+      f.paidAt = new Date();
+      tocadas.push(f);
+    }
+    return tocadas;
   }
 
   async porTransaccion(transactionId: string): Promise<Split[]> {
@@ -497,6 +518,60 @@ describe('SplitsService', () => {
       expect(r.partes.find((p) => p.type === 'driver')?.deductionCents).toBe(2000);
       expect(r.partes.find((p) => p.type === 'platform')?.amountCents).toBe(5315);
       expect(partes.filas.find((f) => f.beneficiaryType === 'driver')?.memo).toContain('penalidad');
+      expect(contable.total()).toBe(0);
+    });
+  });
+
+  // ── Liquidación manual ────────────────────────────────────────────────────
+  //
+  // El modo que hace falta con Square: el procesador deposita todo en la cuenta
+  // de URBONT porque no sabe pagarle a terceros, el libro apunta lo que se le
+  // debe a cada uno, y una persona transfiere desde el banco.
+  describe('en liquidación manual', () => {
+    let manual: SplitsService;
+
+    beforeEach(() => {
+      manual = new SplitsService(
+        new ProviderRegistry([stripe], 'stripe'), libro, partes, personas, contable, 0.15, 'manual',
+      );
+    });
+
+    it('no transfiere nada, ni aunque el procesador sepa hacerlo', async () => {
+      await manual.liquidar(CLAVE, PETICION);
+      // Stripe sabe transferir y los beneficiarios tienen cuenta: lo único que
+      // lo impide es el modo. Si esto se rompe, se paga dos veces — por el
+      // procesador y a mano.
+      expect(stripe.transfer).not.toHaveBeenCalled();
+    });
+
+    it('deja al chofer y al valet pendientes, que es lo que lee el panel de pagos', async () => {
+      const r = await manual.liquidar(CLAVE, PETICION);
+
+      expect(r.partes.find((p) => p.type === 'driver')?.status).toBe('pending');
+      expect(r.partes.find((p) => p.type === 'valet')?.status).toBe('pending');
+    });
+
+    it('la parte de la plataforma sí queda pagada: ese dinero ya está donde tiene que estar', async () => {
+      const r = await manual.liquidar(CLAVE, PETICION);
+
+      expect(r.partes.find((p) => p.type === 'platform')?.status).toBe('paid');
+    });
+
+    it('graba el modo en la fila, no sólo en la configuración', async () => {
+      await manual.liquidar(CLAVE, PETICION);
+
+      // Cambiar el ajuste mañana no puede reescribir cómo se acordó pagar un
+      // reparto que ya está hecho.
+      expect(partes.filas.every((f) => f.settlementMode === 'manual')).toBe(true);
+    });
+
+    it('el reparto sigue cuadrando: lo apuntado suma lo capturado', async () => {
+      const r = await manual.liquidar(CLAVE, PETICION);
+
+      const suma = r.partes.reduce((a, p) => a + p.amountCents, 0);
+      expect(suma).toBe(r.capturedCents);
+      // Y los asientos del cobro siguen sumando cero: que nadie haya cobrado
+      // todavía no es lo mismo que que el dinero no exista.
       expect(contable.total()).toBe(0);
     });
   });

@@ -201,14 +201,71 @@ describe('lo que Square no sabe hacer', () => {
     await expect(p.payeeStatus('acct')).rejects.toThrow(OperacionNoSoportadaError);
   });
 
-  it('y guardar una tarjeta desde el servidor', async () => {
+  it('y lo DICE en sus capacidades, que es lo que impide que el registro lo elija', () => {
     const p = new SquareProvider(squareFalso().cliente, OPCIONES);
-    await expect(p.saveCard({ idempotencyKey: 'k', payerId: 'pax-1' })).rejects.toThrow(OperacionNoSoportadaError);
-    // Y lo DICE en sus capacidades, que es lo que impide que el registro lo
-    // elija para cobrar una propina con tarjeta guardada.
-    expect(p.capabilities.savedCards).toBe(false);
     expect(p.capabilities.payouts).toBe(false);
     expect(p.capabilities.splitAtCapture).toBe(false);
+  });
+});
+
+/**
+ * Guardar una tarjeta, que es lo que Square hace al revés que Stripe.
+ *
+ * Stripe crea un `SetupIntent` en el servidor y la app lo confirma después;
+ * Square exige el token por delante y, con él, la tarjeta queda guardada en la
+ * misma llamada. Por eso el contrato devuelve una unión: cada procesador acaba
+ * en un sitio distinto, y quien llama tiene que saber en cuál.
+ */
+describe('guardar una tarjeta', () => {
+  it('se niega sin token, en vez de dejar un cliente huérfano en Square', async () => {
+    const p = new SquareProvider(squareFalso().cliente, OPCIONES);
+    // Un `customers.create` sin tarjeta detrás deja basura que nadie vuelve a
+    // mirar, y encima haría creer que el alta salió bien.
+    await expect(p.saveCard({ idempotencyKey: 'k', payerId: 'pax-1' }))
+      .rejects.toThrow(OperacionNoSoportadaError);
+  });
+
+  it('con token, la guarda y dice que ya está guardada', async () => {
+    const { cliente } = squareFalso();
+    cliente.customers = {
+      create: async () => ({ customer: { id: 'cus_sq' } }),
+    } as never;
+    cliente.cards = {
+      create: async () => ({
+        card: { id: 'ccof_1', cardBrand: 'VISA', last4: '1111', expMonth: 10n, expYear: 2032n },
+      }),
+    } as never;
+
+    const p = new SquareProvider(cliente, OPCIONES);
+    const r = await p.saveCard({ idempotencyKey: 'k', payerId: 'pax-1', cardToken: 'cnon:card-nonce-ok' });
+
+    // El modo es lo que importa: no hay nada que la app tenga que confirmar
+    // después, y dar un `clientSecret` inventado sería mentir.
+    expect(r.modo).toBe('guardada');
+    if (r.modo !== 'guardada') throw new Error('modo inesperado');
+    expect(r.customerRef).toBe('cus_sq');
+    expect(r.card.providerRef).toBe('ccof_1');
+    expect(r.card.last4).toBe('1111');
+    expect(r.card.provider).toBe('square');
+  });
+
+  it('reusa el cliente que ya tenía: un reintento no crea otro', async () => {
+    const { cliente } = squareFalso();
+    const crearCliente = vi.fn();
+    cliente.customers = { create: crearCliente } as never;
+    cliente.cards = {
+      create: async () => ({ card: { id: 'ccof_2', cardBrand: 'VISA', last4: '4242', expMonth: 1n, expYear: 2030n } }),
+    } as never;
+
+    const p = new SquareProvider(cliente, OPCIONES);
+    await p.saveCard({ idempotencyKey: 'k', payerId: 'pax-1', customerRef: 'cus_ya_existia', cardToken: 'cnon:ok' });
+
+    expect(crearCliente).not.toHaveBeenCalled();
+  });
+
+  it('declara que sabe guardar tarjetas: el registro lo necesita para elegirlo', () => {
+    const p = new SquareProvider(squareFalso().cliente, OPCIONES);
+    expect(p.capabilities.savedCards).toBe(true);
   });
 });
 
