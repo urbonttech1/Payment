@@ -51,6 +51,11 @@ export class SettingsService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger(SettingsService.name);
   private reloj: NodeJS.Timeout | null = null;
   private guardado: RuteoGuardado;
+  /**
+   * Cuántas lecturas seguidas han pedido una pasarela que esta tarea no tiene
+   * montada, por pasarela. Un acierto, o que el panel pida otra, reinicia la cuenta.
+   */
+  private readonly fallosSeguidos = new Map<ProviderName, number>();
 
   constructor(
     @Inject(POOL) private readonly pool: Pool,
@@ -125,6 +130,34 @@ export class SettingsService implements OnModuleInit, OnModuleDestroy {
     return this.refrescar();
   }
 
+  /**
+   * El primer fallo es un aviso; a partir del segundo seguido, un error.
+   *
+   * Al arrancar, este servicio lee la configuración ANTES de que `CredentialsService`
+   * monte las pasarelas guardadas en la base, así que si el panel eligió una de ellas
+   * (hoy, Square) el primer intento falla en CADA arranque, y un instante después las
+   * credenciales la montan y llaman a `aplicar()`. Eso es esperable, y escribirlo como
+   * ERROR —dos por despliegue— hacía saltar en falso cualquier alarma sobre errores
+   * y enseñaba un fallo que no lo era.
+   *
+   * Pero si en la lectura siguiente, 30 s después, sigue sin estar, sí pasa algo (una
+   * credencial rota o que no se descifra) y no puede quedarse como un aviso que nadie
+   * mira.
+   */
+  private avisarDeProcesadorSinMontar(nombre: ProviderName, causa: unknown): void {
+    const intentos = (this.fallosSeguidos.get(nombre) ?? 0) + 1;
+    this.fallosSeguidos.set(nombre, intentos);
+
+    const base = `La configuración pide '${nombre}' y esta tarea no lo tiene montado: sigue '${this.registry.porDefecto}'. ${
+      causa instanceof Error ? causa.message : String(causa)
+    }`;
+    if (intentos === 1) {
+      this.log.warn(`${base} (esperable al arrancar: las credenciales se montan justo después)`);
+    } else {
+      this.log.error(`${base} (${intentos} intentos seguidos)`);
+    }
+  }
+
   private async refrescar(): Promise<void> {
     try {
       const { rows } = await this.pool.query<{ value: unknown; updated_by: string | null; updated_at: Date }>(
@@ -151,16 +184,15 @@ export class SettingsService implements OnModuleInit, OnModuleDestroy {
       if (this.registry.porDefecto !== nombre) {
         try {
           this.registry.fijarPorDefecto(nombre);
+          this.fallosSeguidos.delete(nombre);
         } catch (e) {
           // El guardado apunta a un procesador que esta tarea todavía no montó.
           // La credencial llega sola en el siguiente refresco; mientras, se
           // sigue con el que hay, que al menos cobra.
-          this.log.error(
-            `La configuración pide '${nombre}' y esta tarea no lo tiene montado: sigue '${this.registry.porDefecto}'. ${
-              e instanceof Error ? e.message : String(e)
-            }`,
-          );
+          this.avisarDeProcesadorSinMontar(nombre, e);
         }
+      } else {
+        this.fallosSeguidos.delete(nombre);
       }
     } catch (e) {
       // Si no se puede leer, sigue valiendo lo último que se leyó.
