@@ -249,6 +249,41 @@ describe('guardar una tarjeta', () => {
     expect(r.card.provider).toBe('square');
   });
 
+  it('manda un dato identificativo al crear el cliente, o Square rechaza el alta', async () => {
+    const { cliente } = squareFalso();
+    const crear = vi.fn(async () => ({ customer: { id: 'cus_sq' } }));
+    cliente.customers = { create: crear } as never;
+    cliente.cards = {
+      create: async () => ({ card: { id: 'ccof_1', cardBrand: 'VISA', last4: '1111', expMonth: 10n, expYear: 2032n } }),
+    } as never;
+
+    const p = new SquareProvider(cliente, OPCIONES);
+    await p.saveCard({ idempotencyKey: 'k', payerId: 'pax-1', cardToken: 'cnon:card-nonce-ok' });
+
+    // Esto llegó a producción: con sólo `referenceId`, Square responde 400
+    // «At least one of given_name, family_name, company_name, email_address,
+    // or phone_number is required for a customer» y la tarjeta no se guarda
+    // jamás. El pagador veía «el servicio de pagos no contesta».
+    const args = crear.mock.calls[0][0] as Record<string, unknown>;
+    expect(args.emailAddress ?? args.companyName ?? args.givenName).toBeTruthy();
+  });
+
+  it('prefiere el correo cuando viene: es lo que hace la ficha reconocible', async () => {
+    const { cliente } = squareFalso();
+    const crear = vi.fn(async () => ({ customer: { id: 'cus_sq' } }));
+    cliente.customers = { create: crear } as never;
+    cliente.cards = {
+      create: async () => ({ card: { id: 'ccof_1', cardBrand: 'VISA', last4: '1111', expMonth: 10n, expYear: 2032n } }),
+    } as never;
+
+    const p = new SquareProvider(cliente, OPCIONES);
+    await p.saveCard({
+      idempotencyKey: 'k', payerId: 'pax-1', cardToken: 'cnon:ok', payerEmail: 'pax@urbont.com',
+    });
+
+    expect((crear.mock.calls[0][0] as Record<string, unknown>).emailAddress).toBe('pax@urbont.com');
+  });
+
   it('reusa el cliente que ya tenía: un reintento no crea otro', async () => {
     const { cliente } = squareFalso();
     const crearCliente = vi.fn();

@@ -275,6 +275,16 @@ export interface SaveCardCommand {
    * de guardar algo a medias.
    */
   cardToken?: string;
+  /**
+   * El correo del pagador, si quien llama lo tiene.
+   *
+   * Square **exige** al menos un dato identificativo para crear un cliente
+   * (`given_name`, `family_name`, `company_name`, `email_address` o
+   * `phone_number`): sólo con una referencia interna responde 400. Cuando no
+   * viene, el adaptador pone un valor por defecto para no fallar, pero el
+   * correo hace que la ficha sea reconocible en el panel del procesador.
+   */
+  payerEmail?: string;
 }
 
 /**

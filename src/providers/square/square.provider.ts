@@ -356,6 +356,13 @@ export class SquareProvider implements PaymentProvider {
             // La clave sale del pagador y no es aleatoria: un reintento tiene
             // que encontrar al mismo cliente, no crear otro.
             idempotencyKey: `customer_${cmd.payerId}`,
+            // Square EXIGE al menos uno de given_name, family_name,
+            // company_name, email_address o phone_number. Con sólo
+            // `referenceId` responde 400 y la tarjeta no se guarda nunca.
+            // El correo es lo que hace la ficha reconocible en su panel; sin
+            // él se pone un nombre fijo, que cumple el requisito y deja la
+            // identificación real en `referenceId`.
+            ...(cmd.payerEmail ? { emailAddress: cmd.payerEmail } : { companyName: 'URBONT' }),
           })
         ).customer?.id;
 
