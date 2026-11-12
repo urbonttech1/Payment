@@ -194,6 +194,7 @@ export class PayoutsService {
         method,
         reference: opciones.reference,
         notes: opciones.notes,
+        documentPath: opciones.documentPath,
         periodStart: new Date(Math.min(...fechas)),
         periodEnd: new Date(Math.max(...fechas)),
         createdBy: quien,

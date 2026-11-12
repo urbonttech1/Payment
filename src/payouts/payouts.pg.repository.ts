@@ -167,11 +167,12 @@ interface FilaPago {
   period_end: Date | null;
   paid_at: Date;
   created_by: string;
+  document_path: string | null;
 }
 
 const COLUMNAS_PAGO = `
   id, payee_id, payee_type, amount_cents, currency, method, reference, notes,
-  period_start, period_end, paid_at, created_by
+  period_start, period_end, paid_at, created_by, document_path
 `;
 
 function aPago(f: FilaPago): Payout {
@@ -190,6 +191,7 @@ function aPago(f: FilaPago): Payout {
     periodEnd: f.period_end,
     paidAt: f.paid_at,
     createdBy: f.created_by,
+    documentPath: f.document_path,
   };
 }
 
@@ -213,8 +215,8 @@ export class PgPayoutsRepository implements PayoutsRepository {
       const { rows } = await cliente.query<FilaPago>(
         `INSERT INTO payments.payouts
            (payee_id, payee_type, amount_cents, currency, method, reference, notes,
-            period_start, period_end, created_by)
-         VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            period_start, period_end, created_by, document_path)
+         VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          RETURNING ${COLUMNAS_PAGO}`,
         [
           pago.payeeId,
@@ -227,6 +229,7 @@ export class PgPayoutsRepository implements PayoutsRepository {
           pago.periodStart ?? null,
           pago.periodEnd ?? null,
           pago.createdBy.slice(0, 200),
+          pago.documentPath?.trim().slice(0, 500) || null,
         ],
       );
       const guardado = aPago(rows[0]);

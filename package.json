@@ -1,6 +1,6 @@
 {
   "name": "urbont-payments",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "private": true,
   "description": "URBONT PAYMENTS — capa de abstracción de pagos de URBONT Mobility Technology Inc.",
   "type": "commonjs",

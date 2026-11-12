@@ -98,6 +98,8 @@ export interface Payout {
   periodEnd: Date | null;
   paidAt: Date;
   createdBy: string;
+  /** El justificante de la transferencia, para que le llegue al cobrador. */
+  documentPath: string | null;
 }
 
 export interface NuevoPago {
@@ -111,6 +113,8 @@ export interface NuevoPago {
   periodStart?: Date | null;
   periodEnd?: Date | null;
   createdBy: string;
+  /** La ruta del justificante en el almacenamiento, si quien pagó subió uno. */
+  documentPath?: string | null;
 }
 
 /** El resultado de registrar un pago: qué se saldó con él. */

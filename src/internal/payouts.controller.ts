@@ -56,6 +56,8 @@ const cuerpoDePago = z.object({
   method: z.enum(['ach', 'zelle', 'cash', 'other']),
   reference: z.string().max(200).optional(),
   notes: z.string().max(1000).optional(),
+  /** Ruta del justificante en el almacenamiento, para que le llegue al cobrador. */
+  documentPath: z.string().max(500).optional(),
   updatedBy: z.string().min(1).max(200),
 });
 
@@ -147,6 +149,7 @@ export class PayoutsController {
       return await this.payouts.pagar(payeeId, c.method, c.updatedBy, {
         reference: c.reference,
         notes: c.notes,
+        documentPath: c.documentPath,
       });
     } catch (e) {
       if (e instanceof SinCuentaDeCobroError) throw new NotFoundException(e.message);
