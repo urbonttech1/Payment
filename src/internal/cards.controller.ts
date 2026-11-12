@@ -119,6 +119,9 @@ export class CardsController {
     const preferida = await this.preferidas.obtener(payerId, provider.name);
     return tarjetas.map((t) => ({
       ...t,
+      // Hace falta para cobrar la tarjeta guardada: Square exige el cliente
+      // junto al `ccof:`. Sin esto el cobro no sabe a quién pertenece.
+      customerRef,
       isDefault: preferida ? t.providerRef === preferida : t === tarjetas[0],
     }));
   }
