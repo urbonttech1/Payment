@@ -174,7 +174,7 @@ export class PayoutsService {
     payeeId: string,
     method: MetodoDeTransferencia,
     quien: string,
-    opciones: { reference?: string; notes?: string } = {},
+    opciones: { reference?: string; notes?: string; documentPath?: string } = {},
   ): Promise<PagoRegistrado> {
     const cuenta = await this.cuentas.obtener(payeeId);
     if (!cuenta) throw new SinCuentaDeCobroError(payeeId);
