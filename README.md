@@ -153,6 +153,45 @@ aws ecs update-service --cluster urbont --service urbont-payments \
   --task-definition urbont-payments:7 --region us-east-1 --profile urbont
 ```
 
+## Los registros
+
+Por defecto, **una línea legible por evento**, en UTC (la hora de CloudWatch):
+
+```
+2026-11-12 21:04:01  ERROR  [ErroresDePagoFilter] POST /internal/cards → 502 PROVIDER_FAILED: ProcesadorFalloError: Square falló (…)  (req a1b2c3d4)
+2026-11-12 21:04:01  ERROR  POST /internal/cards → 502  473ms  (req a1b2c3d4)
+2026-11-12 21:02:00  INFO   [ProviderRegistry] Procesador 'square' reemplazado en caliente.
+```
+
+- **Una petición es una línea**: método, ruta, estado, duración y un id. Sin cabeceras
+  (alguna llevaba una firma). La causa de un fallo va en su propia línea, con el mismo
+  `(req …)`: así se juntan las dos.
+- **Las sondas de `/healthz` y `/readyz` no se registran** mientras van bien —eran casi
+  todo el registro—, y sí cuando fallan.
+- **El *stack* sólo sale cuando el error no se esperaba** (un fallo del propio código),
+  y reducido a sus líneas, sin `node_modules`. Un 502 del procesador ya trae su causa en
+  el mensaje.
+- El ruido de arranque de Nest (una línea por ruta) se calla, salvo con `LOG_LEVEL=debug`.
+
+| Variable | Qué hace |
+|---|---|
+| `LOG_LEVEL` | `info` por defecto. `debug` enseña también el arranque de Nest |
+| `LOG_FORMAT` | `json` devuelve el JSON de `pino` tal cual, para alimentar una herramienta de análisis. Cualquier otro valor: texto legible |
+| `LOG_HEALTHCHECKS` | `true` vuelve a registrar las sondas |
+| `LOG_STACK_FRAMES` | cuántas líneas de *stack* se enseñan (4) |
+| `LOG_COLOR` / `NO_COLOR` | colores sólo en una terminal; se fuerzan o se apagan con ellas |
+
+Consultarlos en AWS:
+
+```bash
+aws logs tail /ecs/urbont-payments --follow --profile urbont --region us-east-1
+aws logs tail /ecs/urbont-payments --since 1h --filter-pattern ERROR --profile urbont --region us-east-1
+aws logs tail /ecs/urbont-payments --since 1h --filter-pattern '"req a1b2c3d4"' --profile urbont --region us-east-1
+```
+
+El formateador es una función pura (`src/logging/formato.ts`) y no `pino-pretty`: esa es
+una dependencia de desarrollo y no está en la imagen de producción.
+
 ## La versión
 
 Manda `src/version.ts`, una constante en el código. No se lee de

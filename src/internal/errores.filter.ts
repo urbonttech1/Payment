@@ -42,14 +42,35 @@ export class ErroresDePagoFilter implements ExceptionFilter {
 
   catch(e: unknown, host: ArgumentsHost): void {
     const res = host.switchToHttp().getResponse<Response>();
-    const req = host.switchToHttp().getRequest<{ method: string; originalUrl: string }>();
+    const req = host.switchToHttp().getRequest<{ method: string; originalUrl: string; id?: string | number }>();
 
     const { estado, cuerpo, aviso } = this.traducir(e);
+    // El id de la petición es el mismo que lleva su línea de acceso: así se juntan la
+    // causa de un fallo y la línea que dice cuánto tardó.
+    const id = req.id !== undefined ? `  (req ${req.id})` : '';
     const linea = `${req.method} ${req.originalUrl} → ${estado} ${cuerpo.error}`;
-    if (aviso) this.log.error(`${linea}: ${e instanceof Error ? e.stack : String(e)}`);
-    else this.log.warn(`${linea}: ${e instanceof Error ? e.message : String(e)}`);
+    if (aviso) this.log.error(`${linea}: ${this.detalle(e)}${id}`);
+    else this.log.warn(`${linea}: ${e instanceof Error ? e.message : String(e)}${id}`);
 
     res.status(estado).json(cuerpo);
+  }
+
+  /**
+   * Qué se escribe de un error que es un aviso.
+   *
+   * Un fallo que ya sabemos explicar —el procesador dijo que no, una cuenta ajena, un
+   * procesador sin montar— lleva su causa en el mensaje, y su *stack* sólo dice por
+   * dónde pasó la excepción, que nunca es lo que se busca. Un error que no esperábamos
+   * sí lleva el stack entero: ahí SÍ hay un fallo en el código y las líneas importan.
+   */
+  private detalle(e: unknown): string {
+    if (!(e instanceof Error)) return String(e);
+    const conocido =
+      e instanceof ProcesadorFalloError ||
+      e instanceof CuentaDeOtraPersonaError ||
+      e instanceof ProviderNotAvailableError ||
+      e instanceof HttpException;
+    return conocido ? `${e.name}: ${e.message}` : (e.stack ?? `${e.name}: ${e.message}`);
   }
 
   private traducir(e: unknown): { estado: number; cuerpo: Cuerpo; aviso: boolean } {

@@ -11,21 +11,16 @@ import { SplitsModule } from './splits/splits.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { ReconciliationModule } from './reconciliation/reconciliation.module';
 import { InternalModule } from './internal/internal.module';
+import { configuracionDeLogs } from './logging/logging.config';
 
 export { CONFIG };
 
 @Global()
 @Module({
   imports: [
-    LoggerModule.forRoot({
-      pinoHttp: {
-        level: process.env.LOG_LEVEL ?? 'info',
-        base: { service: 'urbont-payments' },
-        // Nunca en el registro: son credenciales y datos de tarjeta.
-        redact: ['req.headers.authorization', 'req.headers["x-urbont-signature"]', 'req.headers["stripe-signature"]'],
-        transport: process.env.NODE_ENV === 'development' ? { target: 'pino-pretty' } : undefined,
-      },
-    }),
+    // Qué se registra y con qué forma, en `logging/`: texto legible por defecto y
+    // JSON con `LOG_FORMAT=json`; las sondas del balanceador no se registran.
+    LoggerModule.forRoot({ pinoHttp: configuracionDeLogs() }),
     HealthModule,
     ProvidersModule,
     SettingsModule,
