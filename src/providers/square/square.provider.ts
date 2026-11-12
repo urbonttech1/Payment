@@ -396,6 +396,26 @@ export class SquareProvider implements PaymentProvider {
     });
   }
 
+  /**
+   * Busca al cliente por la referencia de URBONT que se puso al crearlo.
+   *
+   * Es lo que permite listar las tarjetas de un pagador sin que guardemos el
+   * identificador de Square: `saveCard` graba `referenceId: payerId`, y por ahí
+   * se vuelve. Devuelve `null` —y no lanza— cuando no hay ninguno, porque «este
+   * pasajero todavía no tiene tarjetas» es una respuesta normal, no un fallo.
+   */
+  async findCustomer(payerId: string): Promise<string | null> {
+    return this.traduciendoErrores(async () => {
+      const r = await this.square.customers.search({
+        query: { filter: { referenceId: { exact: payerId } } },
+        // `bigint` y no `number`: el SDK lo exige y un número suelto revienta
+        // con «Expected bigint», que no se parece a un problema de búsqueda.
+        limit: 1n,
+      });
+      return r.customers?.[0]?.id ?? null;
+    });
+  }
+
   async listCards(customerRef: string): Promise<SavedCard[]> {
     return this.traduciendoErrores(async () => {
       const pagina = await this.square.cards.list({ customerId: customerRef });

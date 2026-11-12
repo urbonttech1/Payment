@@ -72,6 +72,42 @@ describe('qué tiene que hacer la app', () => {
   });
 });
 
+describe('listar las tarjetas de un pagador', () => {
+  it('lo busca por el id de URBONT y devuelve sus tarjetas', async () => {
+    const square = proveedor('square', { savedCards: true }, {
+      findCustomer: vi.fn(async () => 'cus_sq'),
+      listCards: vi.fn(async () => [{ providerRef: 'ccof_1', provider: 'square', brand: 'VISA', last4: '5858', expMonth: 11, expYear: 2028, isDefault: false }]),
+    });
+    const c = new CardsController(new ProviderRegistry([square], 'square'));
+
+    const r = await c.porPagador('pax-1');
+
+    expect(square.findCustomer).toHaveBeenCalledWith('pax-1');
+    expect(r).toHaveLength(1);
+    expect(r[0]).toMatchObject({ last4: '5858' });
+  });
+
+  it('devuelve lista vacía si el pagador no tiene cliente todavía', async () => {
+    const square = proveedor('square', { savedCards: true }, {
+      findCustomer: vi.fn(async () => null),
+      listCards: vi.fn(async () => { throw new Error('no debería llamarse'); }),
+    });
+    const c = new CardsController(new ProviderRegistry([square], 'square'));
+
+    // Un pasajero sin tarjetas no es un error: tratarlo como tal haría que su
+    // cartera pareciera rota en vez de vacía.
+    await expect(c.porPagador('pax-nuevo')).resolves.toEqual([]);
+    expect(square.listCards).not.toHaveBeenCalled();
+  });
+
+  it('devuelve lista vacía si el procesador no sabe buscar por pagador', async () => {
+    // `findCustomer` es opcional en el contrato: un adaptador que no lo
+    // implemente no puede tumbar la pantalla de la cartera.
+    const c = new CardsController(new ProviderRegistry([proveedor('stripe', { savedCards: true })], 'stripe'));
+    await expect(c.porPagador('pax-1')).resolves.toEqual([]);
+  });
+});
+
 describe('guardar una tarjeta', () => {
   it('rechaza un cuerpo sin pagador antes de molestar al procesador', async () => {
     const square = SQUARE();

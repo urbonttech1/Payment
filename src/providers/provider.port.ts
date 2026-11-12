@@ -405,6 +405,19 @@ export interface PaymentProvider {
   refund(cmd: RefundCommand): Promise<Refund>;
 
   saveCard(cmd: SaveCardCommand): Promise<ResultadoDeGuardado>;
+
+  /**
+   * El cliente del procesador para este pagador, o `null` si no tiene.
+   *
+   * Opcional porque no todo adaptador sabe buscar por una referencia nuestra.
+   * Existe para poder listar las tarjetas de alguien **sin guardar nosotros el
+   * identificador del procesador**: el pagador se reconoce por el id de URBONT
+   * que ya viaja en cada alta, y el procesador lo resuelve.
+   *
+   * Cuando haya una tabla propia de métodos de pago, esto deja de hacer falta
+   * para el camino normal y se queda como reconstrucción.
+   */
+  findCustomer?(payerId: string): Promise<string | null>;
   listCards(customerRef: string): Promise<SavedCard[]>;
 
   /**

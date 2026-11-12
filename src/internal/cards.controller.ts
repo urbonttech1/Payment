@@ -84,6 +84,26 @@ export class CardsController {
     return { provider: provider.name, ...guardado };
   }
 
+  /**
+   * Las tarjetas de un pagador, buscándolo por el id de URBONT.
+   *
+   * Va antes que `:customerRef` en el orden de rutas a propósito: si estuviera
+   * después, `by-payer` entraría como si fuera una referencia de cliente.
+   *
+   * Devuelve lista vacía cuando el pagador no tiene cliente en el procesador.
+   * Que alguien no tenga tarjetas no es un error, y tratarlo como tal haría que
+   * la cartera de un pasajero nuevo pareciera rota.
+   */
+  @Get('by-payer/:payerId')
+  async porPagador(@Param('payerId') payerId: string) {
+    const provider = this.registry.paraCobroNuevo(['savedCards']);
+    if (!provider.findCustomer) return [];
+
+    const customerRef = await provider.findCustomer(payerId);
+    if (!customerRef) return [];
+    return provider.listCards(customerRef);
+  }
+
   @Get(':customerRef')
   async listar(@Param('customerRef') customerRef: string) {
     const provider = this.registry.paraCobroNuevo(['savedCards']);
