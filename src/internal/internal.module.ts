@@ -12,6 +12,7 @@ import { PayoutsController } from './payouts.controller';
 import { TerminalController } from './terminal.controller';
 import { ErroresDePagoFilter } from './errores.filter';
 import { FirmaGuard } from './firma.guard';
+import { PreferredCardsRepository } from './preferred-cards.repository';
 
 /**
  * Lo que `urbont-api` puede llamar. Nada de aquí lo llama la app.
@@ -19,6 +20,6 @@ import { FirmaGuard } from './firma.guard';
 @Module({
   imports: [PaymentsModule, SplitsModule, WebhooksModule, ReconciliationModule, PayoutsModule, ProvidersModule],
   controllers: [CardsController, ChargesController, OperacionesController, PayoutsController, TerminalController],
-  providers: [FirmaGuard, ErroresDePagoFilter],
+  providers: [FirmaGuard, ErroresDePagoFilter, PreferredCardsRepository],
 })
 export class InternalModule {}

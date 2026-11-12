@@ -18,6 +18,8 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
+  NotFoundException,
   Param,
   Post,
   UseFilters,
@@ -25,8 +27,11 @@ import {
 } from '@nestjs/common';
 import { z } from 'zod';
 import { ProviderRegistry } from '../providers/provider.registry';
+import { PreferredCardsRepository } from './preferred-cards.repository';
 import { ErroresDePagoFilter } from './errores.filter';
 import { FirmaGuard } from './firma.guard';
+
+const cuerpoDePreferida = z.object({ cardRef: z.string().min(1).max(200) });
 
 const cuerpoDeGuardado = z.object({
   payerId: z.string().min(1).max(100),
@@ -40,7 +45,10 @@ const cuerpoDeGuardado = z.object({
 @UseGuards(FirmaGuard)
 @UseFilters(ErroresDePagoFilter)
 export class CardsController {
-  constructor(private readonly registry: ProviderRegistry) {}
+  constructor(
+    private readonly registry: ProviderRegistry,
+    private readonly preferidas: PreferredCardsRepository,
+  ) {}
 
   /**
    * Qué tiene que hacer la app para guardar una tarjeta.
@@ -101,7 +109,43 @@ export class CardsController {
 
     const customerRef = await provider.findCustomer(payerId);
     if (!customerRef) return [];
-    return provider.listCards(customerRef);
+
+    const tarjetas = await provider.listCards(customerRef);
+    if (tarjetas.length === 0) return [];
+
+    // Cuál es la principal lo decide URBONT, no el procesador. Si no hay
+    // preferencia guardada manda la primera, que es el comportamiento de antes
+    // y el único posible cuando sólo hay una.
+    const preferida = await this.preferidas.obtener(payerId, provider.name);
+    return tarjetas.map((t) => ({
+      ...t,
+      isDefault: preferida ? t.providerRef === preferida : t === tarjetas[0],
+    }));
+  }
+
+  /**
+   * Fija con qué tarjeta se le cobra a este pagador.
+   *
+   * Se comprueba que la tarjeta sea SUYA antes de guardarla: sin eso, mandar
+   * el identificador de la tarjeta de otro bastaría para que le cobraran a él.
+   */
+  @Post('by-payer/:payerId/default')
+  @HttpCode(200)
+  async fijarPreferida(@Param('payerId') payerId: string, @Body() cuerpo: unknown) {
+    const r = cuerpoDePreferida.safeParse(cuerpo);
+    if (!r.success) throw new BadRequestException('Falta la tarjeta (cardRef).');
+
+    const provider = this.registry.paraCobroNuevo(['savedCards']);
+    if (!provider.findCustomer) throw new BadRequestException('Esta pasarela no sabe buscar tarjetas por pagador.');
+
+    const customerRef = await provider.findCustomer(payerId);
+    const suyas = customerRef ? await provider.listCards(customerRef) : [];
+    if (!suyas.some((t) => t.providerRef === r.data.cardRef)) {
+      throw new NotFoundException('Esa tarjeta no es de este pagador.');
+    }
+
+    await this.preferidas.fijar(payerId, provider.name, r.data.cardRef);
+    return { payerId, provider: provider.name, cardRef: r.data.cardRef };
   }
 
   @Get(':customerRef')
