@@ -23,7 +23,7 @@
  * Se ve en `/healthz`, en `/readyz`, en la línea del arranque y en el panel de
  * Stripe, que la muestra junto a cada cobro que este servicio crea.
  */
-export const VERSION = '2.4.0';
+export const VERSION = '2.4.1';
 
 /** El nombre con el que el servicio se presenta. */
 export const SERVICIO = 'urbont-payments';

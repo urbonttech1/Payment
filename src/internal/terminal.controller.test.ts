@@ -161,6 +161,13 @@ describe('POST /internal/terminal/charges/:clave/adopt', () => {
     const r = await llamar(ruta, { providerRef: 'sqpmt_tap_1' });
     expect(r.estado).toBe(200);
     expect(r.cuerpo).toMatchObject({ chargeKey: CLAVE, status: 'captured', provider: 'square', providerRef: 'sqpmt_tap_1', amountCents: 3914 });
+  });
+
+  // `urbont-api` guarda el impuesto en el viaje al dar el cobro por bueno, y no
+  // tiene otra fuente que esta respuesta: sin él habría que volver a calcularlo.
+  it('devuelve también el impuesto del cobro', async () => {
+    const r = await llamar(ruta, { providerRef: 'sqpmt_tap_1' });
+    expect(r.cuerpo).toMatchObject({ taxCents: 239 });
     expect(servicioFalso.adoptarCobroPresencial).toHaveBeenCalledWith(CLAVE, 'sqpmt_tap_1');
   });
 

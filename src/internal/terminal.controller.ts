@@ -163,7 +163,15 @@ export class TerminalController {
   async adoptar(
     @Param('clave') clave: string,
     @Body() body: unknown,
-  ): Promise<{ chargeKey: string; status: string; provider: string; providerRef: string | null; amountCents: number }> {
+  ): Promise<{
+    chargeKey: string;
+    status: string;
+    provider: string;
+    providerRef: string | null;
+    amountCents: number;
+    /** `urbont-api` lo guarda en el viaje al dar el cobro por bueno. */
+    taxCents: number;
+  }> {
     const clave_ = CLAVE.safeParse(clave);
     const datos = cuerpoDeAdopcion.safeParse(body ?? {});
     if (!clave_.success || !datos.success) {
@@ -183,6 +191,7 @@ export class TerminalController {
       provider: tx.provider,
       providerRef: tx.providerRef,
       amountCents: tx.amountCents,
+      taxCents: tx.taxCents,
     };
   }
 }
