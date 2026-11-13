@@ -213,6 +213,14 @@ describe('qué hace cada aviso', () => {
     expect(libro.marcarCapturada).toHaveBeenCalledWith('tx-1', PI, 11715);
   });
 
+  // Square avisa de un pago hecho por el teléfono con su cargo: si el aviso lo
+  // trae, se apunta junto con la captura; si no lo trae (Stripe), no se toca.
+  it('si el aviso trae el cargo, se apunta al capturar', async () => {
+    const { servicio, libro } = montar([evento({ chargeRef: 'sqpmt_1' })], cobro({ status: 'pending' }));
+    await servicio.recibir('stripe', PETICION);
+    expect(libro.marcarCapturada).toHaveBeenCalledWith('tx-1', PI, 11715, 'sqpmt_1');
+  });
+
   it('un cobro ya capturado no se vuelve a capturar', async () => {
     const { servicio, libro } = montar([evento()], cobro({ status: 'captured' }));
     await servicio.recibir('stripe', PETICION);

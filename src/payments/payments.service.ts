@@ -32,9 +32,11 @@ import type {
   ChargeKind,
   Currency,
   PaymentProvider,
+  ProviderName,
   Refund,
   TerminalSession,
 } from '../providers/provider.port';
+import { PagoNoAdoptableError } from '../providers/provider.port';
 
 export class TransaccionNoEncontradaError extends Error {
   constructor(referencia: string) {
@@ -212,12 +214,24 @@ export class PaymentsService {
    * persona se pueda conciliar como cualquier otro.
    */
   async cobrarEnPersona(
-    p: PeticionDeCobro & { terminalRef?: string },
-  ): Promise<{ transaccion: Transaction; autorizacion: Authorization | null }> {
-    const provider = this.registry.paraCobroNuevo(['tapToPay']);
-    if (!provider.presentCharge) {
+    p: PeticionDeCobro & { terminalRef?: string; proveedor?: ProviderName },
+  ): Promise<{
+    transaccion: Transaction;
+    autorizacion: Authorization | null;
+    /** Sólo cuando cobra el SDK del teléfono: lo que éste necesita para crear el pago. */
+    dispositivo?: { referenceId: string; paymentAttemptId: string };
+  }> {
+    // `proveedor` es el que pide quien llama: una app ya publicada espera el cobro
+    // presencial de Stripe aunque el procesador por defecto sea Square.
+    const provider = this.registry.paraCobroNuevo(['tapToPay'], p.proveedor);
+
+    // Dos formas de cobrar en persona. Con Stripe el servidor crea el cobro y el
+    // teléfono lo remata (`presentCharge`). Con Square el teléfono crea el pago por
+    // sí mismo y el servidor lo adopta después (`adoptPayment`).
+    const delDispositivo = !provider.presentCharge && Boolean(provider.adoptPayment);
+    if (!provider.presentCharge && !delDispositivo) {
       throw new EstadoInesperadoError(
-        `'${provider.name}' dice saber cobrar en persona pero no implementa presentCharge.`,
+        `'${provider.name}' dice saber cobrar en persona pero no implementa presentCharge ni adoptPayment.`,
       );
     }
 
@@ -231,6 +245,26 @@ export class PaymentsService {
       taxCents: p.taxCents ?? 0,
       currency: p.currency,
     });
+
+    if (delDispositivo) {
+      // No se llama al procesador: el cobro lo crea el teléfono. Aquí queda la
+      // intención apuntada (`pending`, sin referencia) y se devuelve lo que el SDK
+      // necesita. Un reintento devuelve la misma fila, así que dar dos veces al
+      // botón no apunta dos cobros.
+      return {
+        transaccion,
+        autorizacion: null,
+        dispositivo: {
+          // La referencia es lo que se comprueba al adoptar: el pago tiene que
+          // venir atado a ESTE viaje.
+          referenceId: (p.rideId ?? transaccion.id).slice(0, 40),
+          paymentAttemptId: provider.deviceAttemptKey
+            ? provider.deviceAttemptKey(p.idempotencyKey)
+            : p.idempotencyKey,
+        },
+      };
+    }
+    const presentCharge = provider.presentCharge!.bind(provider);
 
     // Un reintento del chofer —le dio dos veces al botón, se le fue la red—
     // devuelve el mismo cobro, no uno nuevo.
@@ -248,7 +282,7 @@ export class PaymentsService {
     }
 
     try {
-      const autorizacion = await provider.presentCharge({
+      const autorizacion = await presentCharge({
         idempotencyKey: p.idempotencyKey,
         kind: p.kind,
         amount: p.amountCents,
@@ -274,14 +308,76 @@ export class PaymentsService {
    *
    * No se guarda ni se reutiliza: dura minutos y se pide uno por sesión.
    */
-  async sesionDeTerminal(): Promise<TerminalSession> {
-    const provider = this.registry.paraCobroNuevo(['tapToPay']);
+  async sesionDeTerminal(preferido?: ProviderName): Promise<TerminalSession> {
+    const provider = this.registry.paraCobroNuevo(['tapToPay'], preferido);
     if (!provider.terminalSession) {
       throw new EstadoInesperadoError(
         `'${provider.name}' dice saber cobrar en persona pero no implementa terminalSession.`,
       );
     }
     return provider.terminalSession();
+  }
+
+  /**
+   * Da por cobrado en el libro un pago que el SDK del teléfono ya hizo.
+   *
+   * Es la segunda mitad del cobro con Square: el teléfono creó el pago, y aquí se
+   * lee del procesador y se comprueba contra lo que ESTE servicio esperaba —el
+   * importe, la moneda y el viaje salen de la fila, no de lo que diga el
+   * teléfono— antes de marcarlo capturado.
+   *
+   * Es seguro repetirlo: adoptar el mismo pago dos veces devuelve el cobro ya
+   * capturado sin volver a preguntar. Lo que no se puede es colgar un pago
+   * distinto de un cobro ya capturado, ni el mismo pago de dos cobros.
+   */
+  async adoptarCobroPresencial(clave: string, providerRef: string): Promise<Transaction> {
+    const tx = await this.transacciones.porClaveDeIdempotencia(clave);
+    if (!tx) throw new TransaccionNoEncontradaError(clave);
+
+    if (tx.status === 'captured') {
+      if (tx.providerRef === providerRef) return tx;
+      throw new EstadoInesperadoError(
+        `${clave} ya está cobrado con ${tx.providerRef ?? 'otro pago'}: no se puede adoptar ${providerRef}.`,
+      );
+    }
+    if (tx.status !== 'pending') {
+      throw new EstadoInesperadoError(`${clave} está '${tx.status}': no se puede adoptar un pago sobre él.`);
+    }
+
+    const provider = this.registry.paraCobroExistente(tx.provider);
+    if (!provider.adoptPayment) {
+      throw new EstadoInesperadoError(`'${provider.name}' no implementa adoptPayment: sus cobros presenciales los crea el servidor.`);
+    }
+
+    // El mismo pago no puede sostener dos cobros. El índice único de la base lo
+    // impide también, pero preguntar antes da un error que se entiende y evita
+    // gastar una llamada al procesador.
+    const otra = await this.transacciones.porReferenciaDelProveedor(tx.provider, providerRef);
+    if (otra && otra.id !== tx.id) {
+      throw new EstadoInesperadoError(
+        `El pago ${providerRef} ya está adoptado por ${otra.idempotencyKey}: no puede sostener también ${clave}.`,
+      );
+    }
+
+    try {
+      const a = await provider.adoptPayment({
+        providerRef,
+        expected: {
+          amount: tx.amountCents,
+          currency: tx.currency,
+          ...(tx.rideId ? { reference: tx.rideId } : {}),
+        },
+      });
+      return await this.transacciones.marcarCapturada(tx.id, a.providerRef, a.amount, a.chargeRef);
+    } catch (e) {
+      if (e instanceof PagoNoAdoptableError) {
+        // El teléfono cobró algo que no es lo esperado. El cobro se queda `pending`
+        // —no se da por cobrado— y esto se registra alto: hay dinero en el
+        // procesador que no cuadra con el libro y una persona tiene que mirarlo.
+        this.log.error(`${clave}: el pago ${providerRef} NO se adopta (${e.motivo}): ${e.message}`);
+      }
+      throw e;
+    }
   }
 
   /**

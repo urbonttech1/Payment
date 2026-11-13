@@ -120,6 +120,8 @@ export interface EventoTraducido {
   tipo: ProviderEventType;
   providerRef: string | null;
   objectRef: string | null;
+  /** Sólo en un pago cobrado: en Square el cargo es el propio pago. */
+  chargeRef?: string;
   amount?: Cents;
 }
 
@@ -139,7 +141,9 @@ export function traducirEvento(evento: EventoDeSquare): EventoTraducido | null {
     const importe = centavos(Number(objeto.payment.amount_money?.amount ?? 0));
     const base = { providerRef: objeto.payment.id ?? null, objectRef: objeto.payment.id ?? null, amount: importe };
 
-    if (estado === 'captured') return { tipo: 'payment.captured', ...base };
+    if (estado === 'captured') {
+      return { tipo: 'payment.captured', ...base, ...(objeto.payment.id ? { chargeRef: objeto.payment.id } : {}) };
+    }
     if (estado === 'authorized') return { tipo: 'payment.authorized', ...base };
     if (estado === 'failed') return { tipo: 'payment.failed', ...base };
     return null; // pendiente o anulado: nada que hacer todavía

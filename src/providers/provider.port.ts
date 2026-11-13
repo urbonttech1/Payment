@@ -174,6 +174,15 @@ export interface ProviderEvent {
    * identidad del asiento es esta referencia, que los dos caminos conocen.
    */
   objectRef?: string;
+  /**
+   * El cargo del cobro, si el aviso lo trae. Sólo en `payment.captured`.
+   *
+   * En Square el cargo ES el pago y llega con el mismo id; en Stripe es otro
+   * objeto (`latest_charge`) y el aviso del PaymentIntent no lo trae. Por eso es
+   * un campo propio y no `objectRef`: con Stripe `objectRef` es el PaymentIntent,
+   * y apuntarlo como cargo falsearía el cuadre.
+   */
+  chargeRef?: string;
   provider: ProviderName;
   type: ProviderEventType;
   providerRef: string | null;
@@ -356,6 +365,41 @@ export interface TerminalSession {
    * En Stripe es la *location*; otros no lo usan.
    */
   locationRef?: string;
+  /**
+   * El identificador público de nuestra aplicación en el procesador, si su SDK
+   * lo pide para arrancar. En Square es el *Application ID*: el SDK del teléfono
+   * se inicializa con él y se autoriza después con `token` y `locationRef`.
+   */
+  applicationRef?: string;
+  /**
+   * Quién crea el cobro.
+   *
+   *  · `server-intent` (por defecto, y el de Stripe): el servidor crea el cobro y
+   *    el teléfono lo confirma con el `clientSecret` que recibe.
+   *  · `device-sdk` (Square): el SDK del teléfono crea el pago por sí mismo y el
+   *    servidor solo lo **adopta** después (`adoptPayment`).
+   */
+  flow?: 'server-intent' | 'device-sdk';
+}
+
+/**
+ * Dar por nuestro un pago que el SDK del teléfono ya hizo en el procesador.
+ *
+ * El importe lo calculó el servidor pero lo cobró un dispositivo, así que lo que
+ * se espera viaja aparte y se COMPRUEBA contra lo que el procesador dice que
+ * ocurrió. Un teléfono manipulado que cobrara menos —o cobrara otra cosa— no
+ * debe poder pasar por bueno.
+ */
+export interface AdoptPaymentCommand {
+  /** El id del pago en el procesador, tal como lo dio el SDK del teléfono. */
+  providerRef: string;
+  expected: {
+    /** En centavos, con el impuesto: lo que el servidor mandó cobrar. */
+    amount: Cents;
+    currency: Currency;
+    /** Lo que el SDK debía dejar como referencia (el id del viaje), si lo hay. */
+    reference?: string;
+  };
 }
 
 /**
@@ -451,6 +495,21 @@ export interface PaymentProvider {
   terminalSession?(): Promise<TerminalSession>;
 
   /**
+   * Adopta un pago que el SDK del teléfono ya cobró (`flow: 'device-sdk'`).
+   * Sólo con `capabilities.tapToPay` en un procesador que no tiene `presentCharge`.
+   *
+   * Lanza `PagoNoAdoptableError` si no es el pago esperado.
+   */
+  adoptPayment?(cmd: AdoptPaymentCommand): Promise<Authorization>;
+
+  /**
+   * La clave de idempotencia que el teléfono usa al crear el pago, derivada de la
+   * nuestra. Existe porque el procesador puede limitar su largo (Square: 45) y la
+   * del servidor lo supera. Sólo en procesadores con `flow: 'device-sdk'`.
+   */
+  deviceAttemptKey?(idempotencyKey: string): string;
+
+  /**
    * Comprueba que las credenciales valen, sin mover dinero.
    *
    * Una lectura barata y autenticada: si el procesador contesta, la clave es
@@ -506,6 +565,27 @@ export class FirmaDeWebhookInvalidaError extends Error {
   ) {
     super(`La firma del webhook de ${provider} no es válida: ${detalle}`);
     this.name = 'FirmaDeWebhookInvalidaError';
+  }
+}
+
+/**
+ * Lo que el teléfono dice que cobró no es lo que se esperaba.
+ *
+ * `motivo` es una palabra fija para que quien lo recoja pueda decidir sin leer el
+ * mensaje: `importe`, `moneda`, `location`, `referencia`, `propina`, `estado`,
+ * `inexistente`. Reintentar no ayuda: es un pago distinto del esperado, no un fallo.
+ */
+export type MotivoDeAdopcion =
+  | 'importe' | 'moneda' | 'location' | 'referencia' | 'propina' | 'estado' | 'inexistente';
+
+export class PagoNoAdoptableError extends Error {
+  constructor(
+    public readonly provider: ProviderName,
+    public readonly motivo: MotivoDeAdopcion,
+    detalle: string,
+  ) {
+    super(`El pago de ${provider} no se puede adoptar (${motivo}): ${detalle}`);
+    this.name = 'PagoNoAdoptableError';
   }
 }
 

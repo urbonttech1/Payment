@@ -25,6 +25,9 @@ export type ConfigDeSquare = Pick<
   | 'SQUARE_ENVIRONMENT'
   | 'SQUARE_WEBHOOK_SIGNATURE_KEY'
   | 'SQUARE_WEBHOOK_NOTIFICATION_URL'
+  | 'SQUARE_APPLICATION_ID'
+  | 'SQUARE_APPLICATION_SECRET'
+  | 'SQUARE_REFRESH_TOKEN'
 >;
 
 /** El adaptador, o `null` si esta instalación no tiene credenciales de Square. */
@@ -45,11 +48,36 @@ export function crearSquareProvider(config: ConfigDeSquare): SquareProvider | nu
     maxRetries: 2,
   });
 
-  return new SquareProvider(square, {
-    locationId: config.SQUARE_LOCATION_ID,
-    webhookSignatureKey: config.SQUARE_WEBHOOK_SIGNATURE_KEY,
-    webhookNotificationUrl: config.SQUARE_WEBHOOK_NOTIFICATION_URL,
-  });
+  // Tap to Pay: los tres o nada. Con dos de tres no se puede pedir el token del
+  // teléfono, y anunciar la capacidad haría que el registro eligiera Square para
+  // un cobro que acabaría fallando con el chofer delante. Una cadena vacía
+  // —ECS inyecta `""` si la variable no está puesta— cuenta como ausente.
+  const oauth =
+    config.SQUARE_APPLICATION_ID && config.SQUARE_APPLICATION_SECRET && config.SQUARE_REFRESH_TOKEN
+      ? {
+          applicationId: config.SQUARE_APPLICATION_ID,
+          applicationSecret: config.SQUARE_APPLICATION_SECRET,
+          refreshToken: config.SQUARE_REFRESH_TOKEN,
+          // Un cliente aparte, SIN el token del servidor: ObtainToken se
+          // autentica con el secreto de la aplicación en el cuerpo.
+          client: new SquareClient({
+            environment:
+              config.SQUARE_ENVIRONMENT === 'sandbox' ? SquareEnvironment.Sandbox : SquareEnvironment.Production,
+            timeoutInSeconds: 20,
+            maxRetries: 2,
+          }),
+        }
+      : undefined;
+
+  return new SquareProvider(
+    square,
+    {
+      locationId: config.SQUARE_LOCATION_ID,
+      webhookSignatureKey: config.SQUARE_WEBHOOK_SIGNATURE_KEY,
+      webhookNotificationUrl: config.SQUARE_WEBHOOK_NOTIFICATION_URL,
+    },
+    oauth,
+  );
 }
 
 @Module({

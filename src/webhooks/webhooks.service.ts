@@ -218,10 +218,14 @@ export class WebhooksService {
         // en los dos casos el resultado es el mismo, y esto es lo que hace que
         // un cobro no se quede en 'authorized' porque se reinició el proceso.
         if (tx.status !== 'captured') {
+          // El cargo sólo se pasa si el aviso lo trae (Square): sin él, el cobro
+          // se queda sin cargo en el libro y el cuadre lo marca «sólo en el
+          // procesador» aunque esté en los dos sitios.
           await this.transacciones.marcarCapturada(
             tx.id,
             evento.providerRef,
             evento.amount ?? tx.amountCents,
+            ...(evento.chargeRef ? [evento.chargeRef] : []),
           );
         }
         break;

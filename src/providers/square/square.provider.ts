@@ -47,6 +47,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { SquareClient, SquareError, WebhooksHelper } from 'square';
 import type {
+  AdoptPaymentCommand,
   Authorization,
   AuthorizeCommand,
   Capture,
@@ -66,6 +67,7 @@ import type {
   SaveCardCommand,
   SavedCard,
   SettlementCharge,
+  TerminalSession,
   Transfer,
   TransferCommand,
   VoidCommand,
@@ -73,6 +75,7 @@ import type {
 } from '../provider.port';
 import {
   FirmaDeWebhookInvalidaError,
+  PagoNoAdoptableError,
   PagoRechazadoError,
   ProcesadorFalloError,
 } from '../provider.port';
@@ -112,6 +115,34 @@ export interface OpcionesDeSquare {
   webhookNotificationUrl?: string;
 }
 
+/**
+ * Lo que hace falta para el cobro presencial: la aplicación de Square y la
+ * autorización OAuth de la cuenta vendedora.
+ *
+ * El SDK móvil de Square no se autoriza con el token del servidor sino con un
+ * token OAuth con permisos de cobro, que se pide con el *refresh token* de la
+ * autorización inicial. Sin esto Tap to Pay no se anuncia: **tener estas
+ * credenciales es el interruptor**.
+ */
+export interface OAuthDeSquare {
+  applicationId: string;
+  applicationSecret: string;
+  refreshToken: string;
+  /**
+   * Un cliente SIN el token del servidor. `ObtainToken` se autentica con el
+   * secreto de la aplicación en el cuerpo; mandarle además el token de acceso
+   * del servidor sería mezclar dos credenciales en una sola petición.
+   */
+  client: SquareClient;
+}
+
+/**
+ * Los únicos permisos del token que vive en el teléfono de un chofer: leer la
+ * location y cobrar en persona. Ni empleados ni comisiones a terceros ni nada de
+ * lectura que no se use.
+ */
+const PERMISOS_DEL_DISPOSITIVO = ['MERCHANT_PROFILE_READ', 'PAYMENTS_WRITE', 'PAYMENTS_WRITE_IN_PERSON'] as const;
+
 @Injectable()
 export class SquareProvider implements PaymentProvider {
   readonly name: ProviderName = 'square';
@@ -123,26 +154,131 @@ export class SquareProvider implements PaymentProvider {
    * y aquí van en `false` porque por este adaptador no se pueden usar. Una
    * capacidad declarada de más es peor que una de menos: el registro elegiría
    * Square para una operación que acabaría fallando a mitad del cobro.
+   *
+   * `tapToPay` es la excepción que se enciende sola: sólo es `true` si hay
+   * credenciales OAuth, y entonces el adaptador tiene de verdad las dos mitades.
    */
-  readonly capabilities: ProviderCapabilities = {
-    manualCapture: true,
-    partialCapture: true,
-    increaseAuthorization: true,
-    // Puede, pero sólo con el token que la app genera: ver `saveCard`.
-    savedCards: true,
-    payouts: false,
-    splitAtCapture: false,
-    tapToPay: false,
-    bankDebit: false,
-    currencies: ['USD'],
-  };
+  readonly capabilities: ProviderCapabilities;
+
+  /**
+   * Cobro presencial con el SDK del teléfono. **Sólo existen con OAuth.**
+   *
+   * Son propiedades y no métodos de la clase a propósito: la suite de
+   * conformidad exige que, sin `tapToPay`, ni `terminalSession` ni `adoptPayment`
+   * estén definidos, y un método de clase siempre lo está. Y no hay
+   * `presentCharge`: con Square el cobro lo crea el teléfono, no el servidor.
+   */
+  terminalSession?: () => Promise<TerminalSession>;
+  adoptPayment?: (cmd: AdoptPaymentCommand) => Promise<Authorization>;
+  deviceAttemptKey?: (idempotencyKey: string) => string;
 
   private readonly log = new Logger(SquareProvider.name);
 
   constructor(
     private readonly square: SquareClient,
     private readonly opciones: OpcionesDeSquare,
-  ) {}
+    oauth?: OAuthDeSquare,
+  ) {
+    this.capabilities = {
+      manualCapture: true,
+      partialCapture: true,
+      increaseAuthorization: true,
+      // Puede, pero sólo con el token que la app genera: ver `saveCard`.
+      savedCards: true,
+      payouts: false,
+      splitAtCapture: false,
+      tapToPay: Boolean(oauth),
+      bankDebit: false,
+      currencies: ['USD'],
+    };
+
+    if (oauth) {
+      this.terminalSession = () => this.sesionDeDispositivo(oauth);
+      this.adoptPayment = (cmd) => this.adoptar(cmd);
+      // El SDK del teléfono pide una clave de idempotencia de a lo sumo 45
+      // caracteres; la del servidor mide más. Es la misma derivación que ya se usa
+      // al crear pagos desde aquí, así que es determinista.
+      this.deviceAttemptKey = (clave) => claveDeSquare(clave);
+    }
+  }
+
+  // ── Cobro presencial: el teléfono cobra, el servidor adopta ───────────────
+
+  /**
+   * El token que arranca el SDK del teléfono: OAuth, de 24 horas, con los tres
+   * permisos mínimos.
+   *
+   * Se pide uno nuevo en cada sesión y no se guarda: un token que vive en el
+   * teléfono de cada chofer es más permisivo que el *connection token* de Stripe,
+   * y la mitigación es que caduque pronto.
+   */
+  private async sesionDeDispositivo(o: OAuthDeSquare): Promise<TerminalSession> {
+    return this.traduciendoErrores(async () => {
+      const r = await o.client.oAuth.obtainToken({
+        clientId: o.applicationId,
+        clientSecret: o.applicationSecret,
+        grantType: 'refresh_token',
+        refreshToken: o.refreshToken,
+        scopes: [...PERMISOS_DEL_DISPOSITIVO],
+        shortLived: true,
+      });
+
+      if (!r.accessToken) {
+        throw new ProcesadorFalloError(this.name, 'Square no devolvió un token para el teléfono.');
+      }
+
+      const expira = r.expiresAt ? new Date(r.expiresAt) : undefined;
+      return {
+        provider: this.name,
+        token: r.accessToken,
+        locationRef: this.opciones.locationId,
+        applicationRef: o.applicationId,
+        flow: 'device-sdk' as const,
+        ...(expira && !Number.isNaN(expira.getTime()) ? { expiresAt: expira } : {}),
+      };
+    });
+  }
+
+  /**
+   * Da por nuestro un pago que el SDK del teléfono ya hizo.
+   *
+   * El importe lo calculó el servidor pero lo cobró un dispositivo: se lee el
+   * pago de Square por su id —no se confía en lo que diga el teléfono— y se
+   * comprueba que es el esperado antes de devolverlo como capturado.
+   */
+  private async adoptar(cmd: AdoptPaymentCommand): Promise<Authorization> {
+    return this.traduciendoErrores(async () => {
+      const { payment } = await this.square.payments.get({ paymentId: cmd.providerRef });
+      const no = (motivo: ConstructorParameters<typeof PagoNoAdoptableError>[1], detalle: string): never => {
+        throw new PagoNoAdoptableError(this.name, motivo, `${detalle} (${cmd.providerRef})`);
+      };
+
+      if (!payment?.id) return no('inexistente', 'Square no tiene ese pago');
+      if (payment.status !== 'COMPLETED') return no('estado', `el pago está '${payment.status ?? 'sin estado'}', no completado`);
+      if (payment.locationId !== this.opciones.locationId) {
+        return no('location', `la location del pago (${payment.locationId ?? 'ninguna'}) no es la de URBONT (${this.opciones.locationId})`);
+      }
+
+      const moneda = payment.amountMoney?.currency;
+      if (moneda !== cmd.expected.currency) return no('moneda', `se cobró en ${moneda ?? 'ninguna'} y se esperaba ${cmd.expected.currency}`);
+
+      const cobrado = centavos(payment.amountMoney?.amount);
+      if (cobrado !== cmd.expected.amount) return no('importe', `se cobraron ${cobrado} centavos y se esperaban ${cmd.expected.amount}`);
+
+      // Una propina puesta en el teléfono sube el total por encima de lo que el
+      // servidor calculó, y el libro y el cuadre dejarían de cuadrar.
+      if (centavos(payment.tipMoney?.amount) > 0) return no('propina', 'el pago lleva propina y no se esperaba');
+
+      if (cmd.expected.reference !== undefined) {
+        const esperada = cmd.expected.reference.slice(0, 40);
+        if (payment.referenceId !== esperada) {
+          return no('referencia', `la referencia del pago es '${payment.referenceId ?? 'ninguna'}' y se esperaba '${esperada}'`);
+        }
+      }
+
+      return this.aAutorizacion(payment);
+    });
+  }
 
   // ── Cobrar ────────────────────────────────────────────────────────────────
 
@@ -559,6 +695,7 @@ export class SquareProvider implements PaymentProvider {
         type: traducido.tipo,
         providerRef: traducido.providerRef,
         ...(traducido.objectRef ? { objectRef: traducido.objectRef } : {}),
+        ...(traducido.chargeRef ? { chargeRef: traducido.chargeRef } : {}),
         ...(traducido.amount !== undefined ? { amount: traducido.amount } : {}),
         occurredAt: evento.created_at ? new Date(evento.created_at) : new Date(),
         raw: evento,
@@ -606,7 +743,12 @@ export class SquareProvider implements PaymentProvider {
     try {
       return await fn();
     } catch (e) {
-      if (e instanceof OperacionNoSoportadaError || e instanceof FirmaDeWebhookInvalidaError) throw e;
+      if (
+        e instanceof OperacionNoSoportadaError ||
+        e instanceof FirmaDeWebhookInvalidaError ||
+        e instanceof PagoNoAdoptableError ||
+        e instanceof ProcesadorFalloError
+      ) throw e;
 
       if (e instanceof SquareError) {
         const primero = e.errors?.[0];

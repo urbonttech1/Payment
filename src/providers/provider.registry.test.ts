@@ -66,6 +66,41 @@ describe('ProviderRegistry', () => {
       expect(() => r.paraCobroNuevo()).toThrow(ProviderNotAvailableError);
     });
   });
+
+  // Una app ya publicada espera un token y un cobro de Stripe; la nueva espera los
+  // de Square. Con Square por defecto, el registro no puede decidirlo solo: quien
+  // llama dice cuál prefiere, y esa preferencia manda mientras se pueda cumplir.
+  describe('un cobro nuevo con proveedor preferido', () => {
+    const square = fake('square', { manualCapture: true, savedCards: true, tapToPay: true });
+
+    it('LA PREFERENCIA MANDA sobre el procesador por defecto, si sabe hacer lo que hace falta', () => {
+      const r = new ProviderRegistry([stripe, square], 'square');
+      expect(r.paraCobroNuevo(['tapToPay'], 'stripe').name).toBe('stripe');
+      expect(r.paraCobroNuevo(['tapToPay'], 'square').name).toBe('square');
+    });
+
+    it('sin preferencia, todo sigue como antes: el por defecto', () => {
+      const r = new ProviderRegistry([stripe, square], 'square');
+      expect(r.paraCobroNuevo(['tapToPay']).name).toBe('square');
+      expect(r.paraCobroNuevo(['tapToPay'], undefined).name).toBe('square');
+    });
+
+    it('si el preferido no está montado, no se rompe el cobro: se usa el que haya (y se avisa)', () => {
+      const r = new ProviderRegistry([stripe], 'stripe');
+      expect(r.paraCobroNuevo(['tapToPay'], 'square').name).toBe('stripe');
+    });
+
+    it('si el preferido no sabe hacer lo que hace falta, tampoco se rompe', () => {
+      const sinTap = fake('square', { manualCapture: true });
+      const r = new ProviderRegistry([stripe, sinTap], 'stripe');
+      expect(r.paraCobroNuevo(['tapToPay'], 'square').name).toBe('stripe');
+    });
+
+    it('si nadie puede, falla igual que sin preferencia', () => {
+      const r = new ProviderRegistry([paypal], 'paypal');
+      expect(() => r.paraCobroNuevo(['tapToPay'], 'square')).toThrow(ProviderNotAvailableError);
+    });
+  });
 });
 
 // El procesador por defecto se edita desde el panel, así que no puede quedarse

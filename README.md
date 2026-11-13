@@ -108,7 +108,7 @@ de descubrirse en producción.
 | Pagar al chofer | transferencia por beneficiario | **no se puede por aquí** |
 | Guardar una tarjeta | `SetupIntent` desde el servidor | **no se puede por aquí**: necesita token de la app |
 | Metadata | 50 claves | no existe: sólo `reference_id` y una nota |
-| Tap to Pay | token de sesión del servidor | su SDK usa el token OAuth; no hay equivalente |
+| Tap to Pay | token de sesión del servidor; el servidor crea el cobro | token OAuth de 24 h; **el teléfono crea el pago y el servidor lo adopta** (ver abajo) |
 
 Las tres filas en negrita son las que importan antes de encender nada:
 
@@ -127,6 +127,35 @@ Las tres filas en negrita son las que importan antes de encender nada:
   guardó la tarjeta. Con `savedCards: false` en Square no puede pasar nada malo,
   pero el día que haya dos procesadores que guarden tarjetas, esa elección tiene
   que hacerse por el dueño de la tarjeta.
+
+### Tap to Pay con Square: el teléfono cobra, el servidor adopta
+
+Con Stripe el servidor crea el cobro y el teléfono lo remata con un
+`clientSecret`. **Con Square es al revés**: el SDK del teléfono crea el pago por
+sí mismo, y el servidor sólo puede *adoptarlo* después. Por eso el adaptador no
+tiene `presentCharge`; tiene tres cosas distintas:
+
+| | Qué hace |
+|---|---|
+| `terminalSession()` | pide un token OAuth **de 24 horas** (`shortLived`) con tres permisos —`MERCHANT_PROFILE_READ`, `PAYMENTS_WRITE`, `PAYMENTS_WRITE_IN_PERSON`—, y devuelve también la location y el Application ID. Se pide uno por sesión y no se guarda. |
+| `deviceAttemptKey()` | la clave de idempotencia que usa el teléfono, acortada a 45 caracteres (el límite de Square). |
+| `adoptPayment()` | lee el pago de Square **por su id** y comprueba estado, location, moneda, importe, propina y referencia (el viaje) contra lo que el servidor esperaba. Un teléfono manipulado no puede cobrar menos ni cobrar otra cosa. |
+
+El flujo es `POST /internal/terminal/charges` (apunta una fila `pending` sin
+referencia y devuelve `flow: 'device-sdk'`, la referencia y el intento) →
+el SDK cobra → `POST /internal/terminal/charges/:clave/adopt`. Un pago que no
+es el esperado sale como **422 `PAYMENT_NOT_ADOPTABLE`** con el `motivo`, y el
+cobro se queda `pending`.
+
+**El interruptor son las credenciales.** `tapToPay` de Square sólo es `true` si
+están los tres campos —Application ID, secreto y refresh token—; con menos, Square
+cobra igual pero no anuncia Tap to Pay y el registro sigue eligiendo Stripe.
+El refresh token sale de autorizar la cuenta **una sola vez**:
+`npx tsx scripts/square-oauth.ts`. Después se pegan en el panel.
+
+**Una app ya publicada espera Stripe.** `/session` y `/charges` aceptan un
+`provider` preferido: `urbont-api` pide `stripe` por las apps viejas y `square` por
+las nuevas, así que el procesador por defecto puede ser Square sin romper a nadie.
 
 Las credenciales de un procesador nuevo **no son variables de entorno**: se
 pegan en el panel (URBONT PAYMENTS → Configuración), se prueban contra el

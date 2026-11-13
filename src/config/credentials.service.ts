@@ -56,6 +56,10 @@ export const CAMPOS: Record<string, CampoDeCredencial[]> = {
     { nombre: 'locationId', etiqueta: 'Localización que cobra', requerido: true, secreto: false, ayuda: 'L… la location del vendedor' },
     { nombre: 'environment', etiqueta: 'Entorno', requerido: false, secreto: false, ayuda: 'sandbox o production; vacío = production' },
     { nombre: 'webhookSignatureKey', etiqueta: 'Clave de firma del webhook', requerido: false, secreto: true, ayuda: 'La del endpoint, en el panel de Square. La URL que hay que pegar está arriba: no se escribe, Square firma esa exactamente.' },
+    // Tap to Pay: los tres juntos o ninguno. Pegarlos es lo que lo enciende.
+    { nombre: 'applicationId', etiqueta: 'Application ID (Tap to Pay)', requerido: false, secreto: false, ayuda: 'sq0idp-… de la aplicación en el panel de desarrolladores de Square. Solo para cobrar en persona con el teléfono.' },
+    { nombre: 'applicationSecret', etiqueta: 'Secreto de la aplicación (Tap to Pay)', requerido: false, secreto: true, ayuda: 'sq0csp-… de la misma aplicación. Con el Application ID y el Refresh token, activa Tap to Pay.' },
+    { nombre: 'refreshToken', etiqueta: 'Refresh token (Tap to Pay)', requerido: false, secreto: true, ayuda: 'Sale de autorizar la cuenta de Square una sola vez (scripts/square-oauth.ts). No caduca.' },
   ],
 };
 
@@ -311,6 +315,9 @@ export class CredentialsService implements OnModuleInit, OnModuleDestroy {
         SQUARE_ACCESS_TOKEN: valores.accessToken,
         SQUARE_LOCATION_ID: valores.locationId,
         SQUARE_ENVIRONMENT: valores.environment === 'sandbox' ? 'sandbox' : 'production',
+        SQUARE_APPLICATION_ID: valores.applicationId || undefined,
+        SQUARE_APPLICATION_SECRET: valores.applicationSecret || undefined,
+        SQUARE_REFRESH_TOKEN: valores.refreshToken || undefined,
         SQUARE_WEBHOOK_SIGNATURE_KEY: valores.webhookSignatureKey || undefined,
         // La que se enseña en el panel. Square firma incluyéndola, así que no
         // se deja que quien pega la credencial escriba otra.

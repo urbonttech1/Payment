@@ -122,6 +122,17 @@ const esquema = z.object({
   ),
   SQUARE_WEBHOOK_SIGNATURE_KEY: z.string().optional(),
   /**
+   * Tap to Pay con Square: la aplicación y la autorización OAuth de la cuenta.
+   *
+   * El SDK móvil de Square no usa el token del servidor: se autoriza con un token
+   * OAuth que se pide con el *refresh token* de la autorización inicial
+   * (`scripts/square-oauth.ts`). Hacen falta **los tres**; con menos, Square
+   * cobra igual pero NO anuncia Tap to Pay. Tenerlos es el interruptor.
+   */
+  SQUARE_APPLICATION_ID: z.string().optional(),
+  SQUARE_APPLICATION_SECRET: z.string().optional(),
+  SQUARE_REFRESH_TOKEN: z.string().optional(),
+  /**
    * La URL EXACTA que está puesta en el panel de Square.
    *
    * Square firma incluyendo la URL de entrega, así que un carácter de

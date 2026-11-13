@@ -89,6 +89,18 @@ describe('traducirEvento', () => {
     expect(traducirEvento(pago('COMPLETED', 500))?.amount).toBe(500);
   });
 
+  // En Square el cargo ES el pago: su `chargeRef` es el mismo id. Sin él, un
+  // cobro capturado sólo por aviso se queda sin cargo en el libro, y el cuadre
+  // diario lo marca «sólo en el procesador» aunque esté en los dos sitios.
+  it('un pago cobrado trae su cargo (en Square, el mismo id del pago)', () => {
+    expect(traducirEvento(pago('COMPLETED'))?.chargeRef).toBe('sqpmt_1');
+  });
+
+  it('el cargo sólo viaja cuando el pago está cobrado: no hay cargo de lo que se retiene o falla', () => {
+    expect(traducirEvento(pago('APPROVED'))?.chargeRef).toBeUndefined();
+    expect(traducirEvento(pago('FAILED'))?.chargeRef).toBeUndefined();
+  });
+
   it('un reembolso trae SU referencia aparte de la del cobro', () => {
     const t = traducirEvento({
       event_id: 'ev_2',

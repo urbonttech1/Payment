@@ -12,7 +12,7 @@
  * de la cuenta de alguien.
  */
 
-import { BadRequestException, Body, Controller, HttpCode, Post, UseFilters, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, HttpCode, Param, Post, UseFilters, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { PaymentsService } from '../payments/payments.service';
 import type { TerminalSession } from '../providers/provider.port';
@@ -32,15 +32,34 @@ const cuerpoDeCobroPresencial = z.object({
   /** El lector concreto, si el procesador los distingue. */
   terminalRef: z.string().min(1).max(128).optional(),
   metadata: z.record(z.string().max(64), z.string().max(500)).optional(),
+  /**
+   * El procesador que prefiere quien llama. Una app ya publicada espera el cobro
+   * presencial de Stripe aunque el procesador por defecto sea Square: `urbont-api`
+   * lo pide por ella. Si no se puede cumplir, el servicio elige como siempre.
+   */
+  provider: z.enum(['stripe', 'square', 'adyen', 'finix', 'paypal', 'ach']).optional(),
 });
 
 /** La clave la deriva quien llama del viaje y del intento, nunca aleatoria. */
 const CLAVE = z.string().min(8).max(200).regex(/^[A-Za-z0-9_.:-]+$/);
 
+const cuerpoDeSesion = z.object({
+  provider: z.enum(['stripe', 'square', 'adyen', 'finix', 'paypal', 'ach']).optional(),
+});
+
+const cuerpoDeAdopcion = z.object({
+  /** El id del pago en el procesador, tal como lo dio el SDK del teléfono. */
+  providerRef: z.string().min(1).max(200),
+});
+
 interface RespuestaDeSesion {
   provider: string;
   token: string;
   locationRef?: string;
+  /** El id público de nuestra aplicación, si el SDK del teléfono lo pide para arrancar. */
+  applicationRef?: string;
+  /** Quién crea el cobro; ver `TerminalSession.flow`. */
+  flow?: 'server-intent' | 'device-sdk';
   expiresAt?: string;
 }
 
@@ -59,12 +78,22 @@ export class TerminalController {
    */
   @Post('session')
   @HttpCode(200)
-  async sesion(): Promise<RespuestaDeSesion> {
-    const s: TerminalSession = await this.payments.sesionDeTerminal();
+  async sesion(@Body() body: unknown): Promise<RespuestaDeSesion> {
+    const datos = cuerpoDeSesion.safeParse(body ?? {});
+    if (!datos.success) {
+      throw new BadRequestException({
+        error: 'INVALID_REQUEST',
+        detalle: datos.error.issues.map((i) => `${i.path.join('.') || 'cuerpo'}: ${i.message}`).join('; '),
+      });
+    }
+
+    const s: TerminalSession = await this.payments.sesionDeTerminal(datos.data.provider);
     return {
       provider: s.provider,
       token: s.token,
       ...(s.locationRef ? { locationRef: s.locationRef } : {}),
+      ...(s.applicationRef ? { applicationRef: s.applicationRef } : {}),
+      ...(s.flow ? { flow: s.flow } : {}),
       ...(s.expiresAt ? { expiresAt: s.expiresAt.toISOString() } : {}),
     };
   }
@@ -86,6 +115,11 @@ export class TerminalController {
     provider: string;
     providerRef: string | null;
     clientSecret?: string;
+    /** Quién crea el cobro: el servidor (`server-intent`) o el SDK del teléfono (`device-sdk`). */
+    flow: 'server-intent' | 'device-sdk';
+    /** Sólo con `device-sdk`: lo que el SDK pone en el pago para poder adoptarlo después. */
+    referenceId?: string;
+    paymentAttemptId?: string;
     amountCents: number;
   }> {
     const datos = cuerpoDeCobroPresencial.and(z.object({ chargeKey: CLAVE })).safeParse(body ?? {});
@@ -96,11 +130,12 @@ export class TerminalController {
       });
     }
 
-    const { chargeKey, ...resto } = datos.data;
-    const { transaccion, autorizacion } = await this.payments.cobrarEnPersona({
+    const { chargeKey, provider, ...resto } = datos.data;
+    const { transaccion, autorizacion, dispositivo } = await this.payments.cobrarEnPersona({
       idempotencyKey: chargeKey,
       // En persona se cobra en el acto: no hay nada que retener.
       hold: false,
+      ...(provider ? { proveedor: provider } : {}),
       ...resto,
     });
 
@@ -110,7 +145,44 @@ export class TerminalController {
       provider: transaccion.provider,
       providerRef: transaccion.providerRef,
       ...(autorizacion?.clientSecret ? { clientSecret: autorizacion.clientSecret } : {}),
+      flow: dispositivo ? 'device-sdk' : 'server-intent',
+      ...(dispositivo ? { referenceId: dispositivo.referenceId, paymentAttemptId: dispositivo.paymentAttemptId } : {}),
       amountCents: transaccion.amountCents,
+    };
+  }
+
+  /**
+   * Da por cobrado el pago que el SDK del teléfono ya hizo (`flow: 'device-sdk'`).
+   *
+   * El teléfono dice «cobré este pago»; aquí se lee del procesador y se comprueba
+   * contra lo que el servidor esperaba antes de apuntarlo. Un pago que no es el
+   * esperado sale como un 422 con el `motivo`: no es un error del servicio.
+   */
+  @Post('charges/:clave/adopt')
+  @HttpCode(200)
+  async adoptar(
+    @Param('clave') clave: string,
+    @Body() body: unknown,
+  ): Promise<{ chargeKey: string; status: string; provider: string; providerRef: string | null; amountCents: number }> {
+    const clave_ = CLAVE.safeParse(clave);
+    const datos = cuerpoDeAdopcion.safeParse(body ?? {});
+    if (!clave_.success || !datos.success) {
+      throw new BadRequestException({
+        error: 'INVALID_REQUEST',
+        detalle: [
+          ...(clave_.success ? [] : ['clave: no es válida']),
+          ...(datos.success ? [] : datos.error.issues.map((i) => `${i.path.join('.') || 'cuerpo'}: ${i.message}`)),
+        ].join('; '),
+      });
+    }
+
+    const tx = await this.payments.adoptarCobroPresencial(clave_.data, datos.data.providerRef);
+    return {
+      chargeKey: tx.idempotencyKey,
+      status: tx.status,
+      provider: tx.provider,
+      providerRef: tx.providerRef,
+      amountCents: tx.amountCents,
     };
   }
 }

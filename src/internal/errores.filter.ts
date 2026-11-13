@@ -20,7 +20,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import { PagoRechazadoError, ProcesadorFalloError } from '../providers/provider.port';
+import { PagoNoAdoptableError, PagoRechazadoError, ProcesadorFalloError } from '../providers/provider.port';
 import { ProviderNotAvailableError } from '../providers/provider.registry';
 import {
   EstadoInesperadoError,
@@ -34,6 +34,8 @@ interface Cuerpo {
   error: string;
   code?: string;
   detalle?: string;
+  /** En `PAYMENT_NOT_ADOPTABLE`: qué no cuadró (importe, location, referencia…). */
+  motivo?: string;
 }
 
 @Catch()
@@ -67,6 +69,7 @@ export class ErroresDePagoFilter implements ExceptionFilter {
     if (!(e instanceof Error)) return String(e);
     const conocido =
       e instanceof ProcesadorFalloError ||
+      e instanceof PagoNoAdoptableError ||
       e instanceof CuentaDeOtraPersonaError ||
       e instanceof ProviderNotAvailableError ||
       e instanceof HttpException;
@@ -117,6 +120,17 @@ export class ErroresDePagoFilter implements ExceptionFilter {
         estado: HttpStatus.NOT_IMPLEMENTED,
         cuerpo: { error: 'PROVIDER_NOT_SUPPORTED', detalle: e.message },
         aviso: false,
+      };
+    }
+    // El teléfono cobró algo que no es lo esperado (otro importe, otra location,
+    // otro viaje…). No es un fallo del servidor ni se arregla reintentando: es un
+    // pago distinto, y quien llama tiene que decidir qué hacer con ese dinero. Va
+    // con `aviso: true` porque una persona tiene que mirarlo.
+    if (e instanceof PagoNoAdoptableError) {
+      return {
+        estado: HttpStatus.UNPROCESSABLE_ENTITY,
+        cuerpo: { error: 'PAYMENT_NOT_ADOPTABLE', motivo: e.motivo, detalle: e.message },
+        aviso: true,
       };
     }
     if (e instanceof PagoRechazadoError) {

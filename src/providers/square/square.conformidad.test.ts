@@ -29,7 +29,10 @@ const PAGO_APROBADO = {
 
 const PAGO_COMPLETO = { ...PAGO_APROBADO, status: 'COMPLETED' };
 
-function squareFalso(fallo?: Error): SquareClient {
+/** El pago que dejaría el SDK del teléfono: completo, en nuestra location y con el viaje por referencia. */
+const PAGO_DEL_TELEFONO = { ...PAGO_COMPLETO, id: 'sqpmt_tap_1', locationId: 'L1', referenceId: 'ride-conformidad' };
+
+function squareFalso(fallo?: Error, pagoDeGet: unknown = PAGO_COMPLETO): SquareClient {
   const registra = (devuelve: unknown) =>
     vi.fn((...args: unknown[]) => {
       ultima = args;
@@ -39,7 +42,7 @@ function squareFalso(fallo?: Error): SquareClient {
   return {
     payments: {
       create: registra({ payment: PAGO_APROBADO }),
-      get: registra({ payment: PAGO_COMPLETO }),
+      get: registra({ payment: pagoDeGet }),
       update: registra({ payment: { ...PAGO_APROBADO, amountMoney: { amount: 12000n, currency: 'USD' } } }),
       complete: registra({ payment: PAGO_COMPLETO }),
       cancel: registra({ payment: { ...PAGO_APROBADO, status: 'CANCELED' } }),
@@ -92,3 +95,32 @@ const arnes: ArnesDeConformidad = {
 };
 
 pruebasDeConformidad(arnes);
+
+/**
+ * Square con credenciales OAuth: anuncia Tap to Pay, y por tanto la suite le exige
+ * las dos mitades. No tiene `presentCharge` —el cobro lo crea el teléfono—, así que
+ * lo que se le exige en su lugar es poder **adoptar** el pago.
+ */
+const oauth = () => ({
+  applicationId: 'sq0idp-APP',
+  applicationSecret: 'sq0csp-SECRETO',
+  refreshToken: 'EQAAREFRESH',
+  client: {
+    oAuth: {
+      obtainToken: vi.fn(async () => ({ accessToken: 'EAAAshort', expiresAt: '2026-11-14T00:00:00Z' })),
+    },
+  } as unknown as SquareClient,
+});
+
+pruebasDeConformidad({
+  ...arnes,
+  nombre: 'Square (con Tap to Pay)',
+  montar: (): PaymentProvider => new SquareProvider(squareFalso(), OPCIONES, oauth()),
+  montarConRechazo: (): PaymentProvider => new SquareProvider(squareFalso(rechazoDeTarjeta()), OPCIONES, oauth()),
+  montarConFalloDelProcesador: (): PaymentProvider => new SquareProvider(squareFalso(falloDeSquare()), OPCIONES, oauth()),
+  adopcion: {
+    montar: (): PaymentProvider => new SquareProvider(squareFalso(undefined, PAGO_DEL_TELEFONO), OPCIONES, oauth()),
+    providerRef: 'sqpmt_tap_1',
+    esperado: { amount: 11000, currency: 'USD', reference: 'ride-conformidad' },
+  },
+});

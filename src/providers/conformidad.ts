@@ -29,8 +29,10 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  PagoNoAdoptableError,
   PagoRechazadoError,
   ProcesadorFalloError,
+  type AdoptPaymentCommand,
   type AuthorizeCommand,
   type PaymentProvider,
 } from './provider.port';
@@ -93,6 +95,21 @@ export interface ArnesDeConformidad {
 
   /** Monta el adaptador de forma que la siguiente llamada falle por el procesador. */
   montarConFalloDelProcesador(): PaymentProvider;
+
+  /**
+   * **Obligatorio** si el adaptador tiene `adoptPayment` (el cobro lo crea el SDK
+   * del teléfono y el servidor lo adopta después).
+   *
+   * Monta el adaptador con un pago de `providerRef` ya hecho y exactamente igual a
+   * `esperado`, para comprobar que se adopta; la suite pide después el mismo pago
+   * con un importe distinto y exige que se rechace. Sin esa segunda mitad, adoptar
+   * sería aceptar lo que diga el teléfono.
+   */
+  adopcion?: {
+    montar(): PaymentProvider;
+    providerRef: string;
+    esperado: AdoptPaymentCommand['expected'];
+  };
 }
 
 /**
@@ -206,6 +223,8 @@ export function pruebasDeConformidad(arnes: ArnesDeConformidad): void {
         if (!p.capabilities.tapToPay) {
           expect(p.presentCharge).toBeUndefined();
           expect(p.terminalSession).toBeUndefined();
+          expect(p.adoptPayment).toBeUndefined();
+          expect(p.deviceAttemptKey).toBeUndefined();
         }
         if (!p.capabilities.increaseAuthorization) expect(p.increaseAuthorization).toBeUndefined();
       });
@@ -213,10 +232,17 @@ export function pruebasDeConformidad(arnes: ArnesDeConformidad): void {
       // Tap to Pay son DOS mitades y la que se olvida es siempre la misma: el
       // token de sesión. Sin él, el SDK del teléfono no arranca y el cobro
       // presencial no existe, por mucho que `presentCharge` esté escrito.
-      it('TAP TO PAY EXIGE EL COBRO Y EL TOKEN DEL LECTOR', () => {
+      //
+      // La primera mitad tiene dos formas, según quién crea el cobro: el servidor
+      // (`presentCharge`, Stripe) o el SDK del teléfono (`adoptPayment`, Square),
+      // en cuyo caso el servidor sólo puede adoptar después lo que ya se cobró.
+      it('TAP TO PAY EXIGE EL COBRO (O SU ADOPCIÓN) Y EL TOKEN DEL LECTOR', () => {
         const p = arnes.montar();
         if (!p.capabilities.tapToPay) return;
-        expect(typeof p.presentCharge, 'falta presentCharge').toBe('function');
+        expect(
+          typeof p.presentCharge === 'function' || typeof p.adoptPayment === 'function',
+          'falta presentCharge (el servidor crea el cobro) o adoptPayment (lo crea el teléfono)',
+        ).toBe(true);
         expect(typeof p.terminalSession, 'falta terminalSession').toBe('function');
       });
     });
@@ -352,6 +378,67 @@ export function pruebasDeConformidad(arnes: ArnesDeConformidad): void {
         const s = await p.terminalSession();
         expect(s.provider).toBe(p.name);
         expect(s.token).toBeTruthy();
+      });
+    });
+
+    // Cuando el cobro lo crea el SDK del teléfono, el servidor ya no controla qué
+    // se cobra: lo que hace es COMPROBARLO. Estas reglas son lo que impide que un
+    // adaptador acepte como bueno cualquier pago que diga el dispositivo.
+    describe('el cobro en persona con el SDK del teléfono', () => {
+      it('el token de sesión dice que cobra el teléfono', async () => {
+        const p = arnes.montar();
+        if (!p.adoptPayment || p.presentCharge || !p.terminalSession) return;
+        expect((await p.terminalSession()).flow).toBe('device-sdk');
+      });
+
+      it('da una clave de intento para el teléfono que cabe en el límite del procesador', () => {
+        const p = arnes.montar();
+        if (!p.adoptPayment || p.presentCharge) return;
+        expect(typeof p.deviceAttemptKey, 'falta deviceAttemptKey').toBe('function');
+        if (arnes.limiteDeClave !== null) {
+          expect(p.deviceAttemptKey!(CLAVE_COBRO).length).toBeLessThanOrEqual(arnes.limiteDeClave);
+        }
+        // Determinista: un reintento tiene que llegar con la misma clave.
+        expect(p.deviceAttemptKey!(CLAVE_COBRO)).toBe(p.deviceAttemptKey!(CLAVE_COBRO));
+      });
+
+      it('el arnés trae lo necesario para probar la adopción', () => {
+        const p = arnes.montar();
+        if (!p.adoptPayment) return;
+        expect(arnes.adopcion, 'falta `adopcion` en el arnés: sin ella no se prueba que adoptar comprueba algo').toBeDefined();
+      });
+
+      it('ADOPTA el pago que es exactamente el esperado, y lo devuelve cobrado', async () => {
+        if (!arnes.adopcion) return;
+        const p = arnes.adopcion.montar();
+        const a = await p.adoptPayment!({ providerRef: arnes.adopcion.providerRef, expected: arnes.adopcion.esperado });
+        expect(a.status).toBe('captured');
+        expect(a.amount).toBe(arnes.adopcion.esperado.amount);
+        expect(a.provider).toBe(p.name);
+      });
+
+      it('NO ADOPTA un pago de otro importe: un teléfono manipulado no puede cobrar menos', async () => {
+        if (!arnes.adopcion) return;
+        const p = arnes.adopcion.montar();
+        const e = await p
+          .adoptPayment!({
+            providerRef: arnes.adopcion.providerRef,
+            expected: { ...arnes.adopcion.esperado, amount: arnes.adopcion.esperado.amount + 1 },
+          })
+          .catch((x: unknown) => x);
+        expect(e, 'adoptó un pago que no era el esperado').toBeInstanceOf(PagoNoAdoptableError);
+      });
+
+      it('NO ADOPTA un pago de otro viaje', async () => {
+        if (!arnes.adopcion || arnes.adopcion.esperado.reference === undefined) return;
+        const p = arnes.adopcion.montar();
+        const e = await p
+          .adoptPayment!({
+            providerRef: arnes.adopcion.providerRef,
+            expected: { ...arnes.adopcion.esperado, reference: 'otro-viaje' },
+          })
+          .catch((x: unknown) => x);
+        expect(e).toBeInstanceOf(PagoNoAdoptableError);
       });
     });
 

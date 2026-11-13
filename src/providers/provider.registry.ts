@@ -137,7 +137,20 @@ export class ProviderRegistry {
    * Con `necesita`, se salta al por defecto si éste no sabe hacerlo y usa el
    * primero que sí. Sin nadie capaz, falla diciendo qué faltaba.
    */
-  paraCobroNuevo(necesita: CapabilityNeeded[] = []): PaymentProvider {
+  paraCobroNuevo(necesita: CapabilityNeeded[] = [], preferido?: ProviderName): PaymentProvider {
+    // Quien llama puede pedir uno concreto: una app ya publicada espera el cobro
+    // en persona de Stripe aunque el procesador por defecto sea Square. Manda
+    // mientras se pueda cumplir; si no está montado o no sabe hacerlo, no se
+    // rompe el cobro —se sigue con la regla de siempre— pero se avisa.
+    if (preferido) {
+      const p = this.porNombre.get(preferido);
+      if (p && necesita.every((c) => p.capabilities[c])) return p;
+      this.log.warn(
+        `Se pidió '${preferido}' para [${necesita.join(', ') || 'nada en concreto'}] y no puede: ` +
+          (p ? 'no sabe hacerlo' : 'no está montado') + '. Se elige por la regla de siempre.',
+      );
+    }
+
     const porDefecto = this.porNombre.get(this.porDefectoActual);
     if (porDefecto && necesita.every((c) => porDefecto.capabilities[c])) return porDefecto;
 

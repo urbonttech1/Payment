@@ -11,6 +11,7 @@ import type {
   ProviderCapabilities,
   ProviderName,
 } from '../providers/provider.port';
+import { PagoNoAdoptableError } from '../providers/provider.port';
 import type {
   NuevaTransaccion,
   ResultadoDeCreacion,
@@ -416,6 +417,178 @@ describe('PaymentsService · cobrar en persona', () => {
   it('el token del lector viene del procesador que cobra', async () => {
     const sesion = await servicio.sesionDeTerminal();
     expect(sesion).toMatchObject({ provider: 'stripe', token: 'pst_1', locationRef: 'tml_1' });
+  });
+});
+
+/**
+ * Cobrar en persona cuando el que cobra es el SDK del teléfono (Square).
+ *
+ * Con Stripe el servidor crea el cobro y el teléfono lo remata. Con Square el
+ * teléfono crea el pago por sí mismo: el servidor apunta una fila `pending` sin
+ * referencia, le da al SDK lo que necesita, y después ADOPTA el pago que el
+ * teléfono dice haber hecho, comprobando que es el esperado.
+ */
+describe('PaymentsService · cobrar en persona con el SDK del teléfono', () => {
+  let libro: LibroEnMemoria;
+  let square: ReturnType<typeof proveedorDeDispositivo>;
+  let stripe: ReturnType<typeof proveedorFalso>;
+  let servicio: PaymentsService;
+
+  /** Un Square con OAuth: anuncia Tap to Pay, no tiene presentCharge, sí sesión y adopción. */
+  function proveedorDeDispositivo() {
+    const adoptPayment = vi.fn(async (cmd: { providerRef: string; expected: { amount: number } }) => ({
+      providerRef: cmd.providerRef, provider: 'square' as const, status: 'captured' as const,
+      amount: cmd.expected.amount, currency: 'USD' as const, chargeRef: cmd.providerRef,
+    }));
+    return {
+      name: 'square' as const,
+      capabilities: capacidades({ payouts: false }),
+      adoptPayment,
+      deviceAttemptKey: vi.fn((clave: string) => `intento_${clave.length}`),
+      terminalSession: vi.fn(async () => ({
+        provider: 'square' as const, token: 'EAAAshort', locationRef: 'L1', applicationRef: 'sq0idp-APP', flow: 'device-sdk' as const,
+      })),
+    } as unknown as PaymentProvider & {
+      adoptPayment: typeof adoptPayment;
+      deviceAttemptKey: ReturnType<typeof vi.fn>;
+      terminalSession: ReturnType<typeof vi.fn>;
+    };
+  }
+
+  const presencial = {
+    idempotencyKey: 'tap_to_pay_ride-abc_intento1',
+    kind: 'ride' as const,
+    amountCents: 3914,
+    currency: 'USD' as const,
+    hold: false,
+    rideId: 'ride-abc',
+    payerId: 'drv-1',
+    taxCents: 239,
+  };
+
+  beforeEach(() => {
+    libro = new LibroEnMemoria();
+    square = proveedorDeDispositivo();
+    stripe = proveedorFalso('stripe');
+    servicio = new PaymentsService(
+      new ProviderRegistry([stripe, square], 'square'), libro, new AsientosEnMemoria() as never,
+    );
+  });
+
+  it('el servidor NO crea el cobro: apunta una fila pending sin referencia y le da al SDK lo que necesita', async () => {
+    const r = await servicio.cobrarEnPersona(presencial);
+
+    expect(r.autorizacion).toBeNull();
+    expect(r.transaccion).toMatchObject({ provider: 'square', status: 'pending', providerRef: null, amountCents: 3914, taxCents: 239 });
+    expect(stripe.presentCharge).not.toHaveBeenCalled();
+    expect(r.dispositivo).toEqual({
+      referenceId: 'ride-abc',
+      paymentAttemptId: square.deviceAttemptKey.mock.results[0].value,
+    });
+    expect(square.deviceAttemptKey).toHaveBeenCalledWith(presencial.idempotencyKey);
+  });
+
+  it('el chofer que le da dos veces al botón no crea dos filas', async () => {
+    const a = await servicio.cobrarEnPersona(presencial);
+    const b = await servicio.cobrarEnPersona(presencial);
+    expect(b.transaccion.id).toBe(a.transaccion.id);
+  });
+
+  // Una app ya publicada espera el cobro de Stripe aunque Square sea el por defecto.
+  it('UN PROVEEDOR PREFERIDO MANDA: una app vieja sigue cobrando por Stripe', async () => {
+    const r = await servicio.cobrarEnPersona({ ...presencial, proveedor: 'stripe' });
+
+    expect(stripe.presentCharge).toHaveBeenCalledOnce();
+    expect(r.transaccion.provider).toBe('stripe');
+    expect(r.dispositivo).toBeUndefined();
+  });
+
+  it('el token de sesión viene del procesador preferido, y por defecto del por defecto', async () => {
+    expect(await servicio.sesionDeTerminal()).toMatchObject({ provider: 'square', flow: 'device-sdk', applicationRef: 'sq0idp-APP' });
+    expect(await servicio.sesionDeTerminal('stripe')).toMatchObject({ provider: 'stripe', token: 'pst_1' });
+  });
+
+  describe('adoptar el pago que hizo el teléfono', () => {
+    async function conFila() {
+      const { transaccion } = await servicio.cobrarEnPersona(presencial);
+      return transaccion;
+    }
+
+    it('lo comprueba contra lo que el SERVIDOR esperaba —importe, moneda y viaje—, no contra lo que diga el teléfono', async () => {
+      await conFila();
+      await servicio.adoptarCobroPresencial(presencial.idempotencyKey, 'sqpmt_tap_1');
+
+      expect(square.adoptPayment).toHaveBeenCalledWith({
+        providerRef: 'sqpmt_tap_1',
+        expected: { amount: 3914, currency: 'USD', reference: 'ride-abc' },
+      });
+    });
+
+    it('lo deja CAPTURADO en el libro, con la referencia y el cargo del procesador', async () => {
+      const antes = await conFila();
+      const tx = await servicio.adoptarCobroPresencial(presencial.idempotencyKey, 'sqpmt_tap_1');
+
+      expect(tx).toMatchObject({ id: antes.id, status: 'captured', providerRef: 'sqpmt_tap_1', chargeRef: 'sqpmt_tap_1', amountCents: 3914 });
+    });
+
+    it('es idempotente: adoptar dos veces el mismo pago no lo comprueba ni lo apunta otra vez', async () => {
+      await conFila();
+      await servicio.adoptarCobroPresencial(presencial.idempotencyKey, 'sqpmt_tap_1');
+      const otra = await servicio.adoptarCobroPresencial(presencial.idempotencyKey, 'sqpmt_tap_1');
+
+      expect(otra.status).toBe('captured');
+      expect(square.adoptPayment).toHaveBeenCalledTimes(1);
+    });
+
+    it('un cobro ya capturado NO se puede reasignar a otro pago distinto', async () => {
+      await conFila();
+      await servicio.adoptarCobroPresencial(presencial.idempotencyKey, 'sqpmt_tap_1');
+      await expect(servicio.adoptarCobroPresencial(presencial.idempotencyKey, 'sqpmt_OTRO'))
+        .rejects.toBeInstanceOf(EstadoInesperadoError);
+    });
+
+    it('EL MISMO PAGO NO SE ADOPTA PARA DOS COBROS: ni se pregunta al procesador', async () => {
+      await conFila();
+      await servicio.adoptarCobroPresencial(presencial.idempotencyKey, 'sqpmt_tap_1');
+
+      await servicio.cobrarEnPersona({ ...presencial, idempotencyKey: 'tap_to_pay_ride-xyz_intento1', rideId: 'ride-xyz' });
+      square.adoptPayment.mockClear();
+
+      await expect(servicio.adoptarCobroPresencial('tap_to_pay_ride-xyz_intento1', 'sqpmt_tap_1'))
+        .rejects.toThrow(/ya está adoptado/);
+      expect(square.adoptPayment).not.toHaveBeenCalled();
+    });
+
+    it('un cobro que no existe no se adopta', async () => {
+      await expect(servicio.adoptarCobroPresencial('no_existe', 'sqpmt_tap_1'))
+        .rejects.toBeInstanceOf(TransaccionNoEncontradaError);
+    });
+
+    it('si el pago NO es el esperado, el cobro queda pending (no se da por cobrado) y el error sale', async () => {
+      const antes = await conFila();
+      square.adoptPayment.mockRejectedValueOnce(
+        new PagoNoAdoptableError('square', 'importe', 'se cobraron 100 y se esperaban 3914'),
+      );
+
+      await expect(servicio.adoptarCobroPresencial(presencial.idempotencyKey, 'sqpmt_tap_1'))
+        .rejects.toBeInstanceOf(PagoNoAdoptableError);
+      expect(await libro.porId(antes.id)).toMatchObject({ status: 'pending', providerRef: null });
+    });
+
+    it('un cobro fallido o anulado no se adopta', async () => {
+      const antes = await conFila();
+      await libro.marcarFallida(antes.id, 'x');
+      await expect(servicio.adoptarCobroPresencial(presencial.idempotencyKey, 'sqpmt_tap_1'))
+        .rejects.toBeInstanceOf(EstadoInesperadoError);
+      expect(square.adoptPayment).not.toHaveBeenCalled();
+    });
+
+    it('un procesador sin adopción (Stripe) no puede adoptar: lo dice, no lo ignora', async () => {
+      const { transaccion } = await servicio.cobrarEnPersona({ ...presencial, idempotencyKey: 'tap_to_pay_ride-s_1', proveedor: 'stripe' });
+      await expect(servicio.adoptarCobroPresencial('tap_to_pay_ride-s_1', 'pi_1'))
+        .rejects.toThrow(/adoptPayment/);
+      expect((await libro.porId(transaccion.id))?.status).toBe('pending');
+    });
   });
 });
 
