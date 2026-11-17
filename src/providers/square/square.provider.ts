@@ -570,6 +570,24 @@ export class SquareProvider implements PaymentProvider {
     });
   }
 
+  /**
+   * Square no borra tarjetas: las deshabilita, y conserva el registro por si
+   * hay que rastrear un cobro viejo. Para el pasajero es lo mismo —`listCards`
+   * ya filtra por `enabled !== false`, así que desaparece de su cartera—, y
+   * para nosotros es mejor: un reembolso de hace tres meses sigue teniendo a
+   * qué apuntar.
+   *
+   * Es idempotente de fábrica. La documentación del SDK lo dice con todas las
+   * letras: «Disabling an already disabled card is allowed but has no effect.»
+   * Por eso no se comprueba antes si está habilitada: esa comprobación costaría
+   * una llamada más y abriría una carrera entre leer y escribir.
+   */
+  async deleteCard(cardRef: string): Promise<void> {
+    await this.traduciendoErrores(async () => {
+      await this.square.cards.disable({ cardId: cardRef });
+    });
+  }
+
   // ── Beneficiarios y reparto ───────────────────────────────────────────────
 
   /**

@@ -465,6 +465,22 @@ export interface PaymentProvider {
   listCards(customerRef: string): Promise<SavedCard[]>;
 
   /**
+   * Deja de poder cobrarse esta tarjeta.
+   *
+   * **Tiene que ser idempotente.** Quien llama no puede saber si un intento
+   * anterior llegó a cumplirse: la red se corta entre el borrado y la respuesta
+   * más a menudo de lo que parece, y la app reintenta. Borrar dos veces es
+   * normal y la segunda no es un error.
+   *
+   * No promete que el procesador olvide la tarjeta, sólo que no vuelva a
+   * aparecer en `listCards` ni sirva para cobrar: Square la deshabilita y
+   * conserva el registro, Stripe la desvincula del cliente. Lo que el contrato
+   * garantiza es lo que el pasajero espera —que desaparezca de su cartera—, no
+   * cómo lo consigue cada uno.
+   */
+  deleteCard(cardRef: string): Promise<void>;
+
+  /**
    * Cobra contra una tarjeta ya guardada.
    *
    * Devuelve `Authorization` y no `Capture` por un motivo que costó dinero:

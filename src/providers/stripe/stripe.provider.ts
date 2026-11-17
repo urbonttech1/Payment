@@ -64,6 +64,24 @@ import {
   traducirEvento,
 } from './stripe.mapper';
 
+/**
+ * Si este fallo de `detach` significa que la tarjeta ya no estaba en la
+ * cartera. Dos formas de decir lo mismo:
+ *
+ *  · `resource_missing` — el método de pago no existe.
+ *  · «not attached to a customer» — existe, pero ya se desvinculó.
+ *
+ * Los dos se tratan igual porque para quien llama el resultado buscado ya se
+ * cumple: esa tarjeta no se puede cobrar. Distinguirlos sólo serviría para
+ * convertir un reintento en un error que nadie puede arreglar.
+ */
+function yaEstabaDesvinculada(e: unknown): boolean {
+  if (typeof e !== 'object' || e === null) return false;
+  const err = e as { type?: string; code?: string; message?: string };
+  if (err.type !== 'StripeInvalidRequestError') return false;
+  return err.code === 'resource_missing' || (err.message ?? '').includes('not attached');
+}
+
 /** El caso de Stripe del error del contrato. El nombre se queda por claridad. */
 export class FirmaInvalidaError extends FirmaDeWebhookInvalidaError {
   constructor(detalle: string) {
@@ -262,6 +280,28 @@ export class StripeProvider implements PaymentProvider {
           expYear: m.card!.exp_year,
           isDefault: m.id === porDefecto,
         }));
+    });
+  }
+
+  /**
+   * Stripe desvincula la tarjeta del cliente. El método de pago sigue
+   * existiendo —los cobros viejos conservan a qué apuntar—, pero deja de estar
+   * en la cartera y ya no se puede cobrar contra él.
+   *
+   * `detach` sobre una tarjeta ya desvinculada responde con un error de
+   * petición inválida, no con éxito, así que aquí hay que tragárselo a mano
+   * para cumplir lo que el contrato promete: **borrar dos veces no es un
+   * error.** Es el caso corriente de que a la app se le corte la red justo
+   * después de que el borrado se cumpliera.
+   */
+  async deleteCard(cardRef: string): Promise<void> {
+    await this.traduciendoErrores(async () => {
+      try {
+        await this.stripe.paymentMethods.detach(cardRef);
+      } catch (e) {
+        if (yaEstabaDesvinculada(e)) return;
+        throw e;
+      }
     });
   }
 

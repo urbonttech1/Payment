@@ -49,7 +49,10 @@ function squareFalso(respuestas: Record<string, unknown> = {}) {
       list: metodo('list', paginaDe([])),
     },
     refunds: { refundPayment: metodo('refundPayment', { refund: { id: 'sqref_1', amountMoney: { amount: 500n, currency: 'USD' } } }) },
-    cards: { list: metodo('cards.list', { data: [] }) },
+    cards: {
+      list: metodo('cards.list', { data: [] }),
+      disable: metodo('cards.disable', { card: { id: 'ccof_1', enabled: false } }),
+    },
     locations: { list: metodo('locations.list', { locations: [] }) },
   } as unknown as SquareClient;
 
@@ -301,6 +304,40 @@ describe('guardar una tarjeta', () => {
   it('declara que sabe guardar tarjetas: el registro lo necesita para elegirlo', () => {
     const p = new SquareProvider(squareFalso().cliente, OPCIONES);
     expect(p.capabilities.savedCards).toBe(true);
+  });
+});
+
+describe('borrar una tarjeta', () => {
+  it('la deshabilita en Square, que es lo más cerca de borrarla que Square llega', async () => {
+    const { cliente, llamadas } = squareFalso();
+    const p = new SquareProvider(cliente, OPCIONES);
+
+    await p.deleteCard('ccof_1');
+
+    expect(llamadas.map((l) => l.metodo)).toContain('cards.disable');
+    expect(llamadas.find((l) => l.metodo === 'cards.disable')?.args[0])
+      .toEqual({ cardId: 'ccof_1' });
+  });
+
+  it('borrar dos veces no es un error', async () => {
+    const { cliente } = squareFalso();
+    const p = new SquareProvider(cliente, OPCIONES);
+
+    // El contrato lo exige porque la red se corta entre el borrado y la
+    // respuesta más a menudo de lo que parece, y la app reintenta. Square lo
+    // cumple de fábrica: deshabilitar lo ya deshabilitado no hace nada.
+    await expect(p.deleteCard('ccof_1')).resolves.toBeUndefined();
+    await expect(p.deleteCard('ccof_1')).resolves.toBeUndefined();
+  });
+
+  it('un fallo de Square sale traducido, no crudo', async () => {
+    const { cliente } = squareFalso();
+    cliente.cards = {
+      disable: async () => { throw errorDeSquare('API_ERROR'); },
+    } as never;
+
+    const p = new SquareProvider(cliente, OPCIONES);
+    await expect(p.deleteCard('ccof_1')).rejects.toThrow(ProcesadorFalloError);
   });
 });
 

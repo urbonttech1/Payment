@@ -17,6 +17,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   NotFoundException,
@@ -149,6 +150,49 @@ export class CardsController {
 
     await this.preferidas.fijar(payerId, provider.name, r.data.cardRef);
     return { payerId, provider: provider.name, cardRef: r.data.cardRef };
+  }
+
+  /**
+   * Quita una tarjeta de la cartera del pasajero.
+   *
+   * Va por pagador y no por referencia suelta por lo mismo que `fijarPreferida`:
+   * **hay que comprobar que la tarjeta sea suya.** Sin esa comprobación,
+   * mandar el identificador de la tarjeta de otro bastaría para dejarle sin
+   * forma de pagar.
+   *
+   * Dos cosas que no son obvias:
+   *
+   *  · **Se olvida la preferencia aunque la borrada no fuera la preferida.**
+   *    La tabla guarda una fila por pagador, así que no se puede olvidar «sólo
+   *    ésta»; y dejar apuntando a una tarjeta que ya no está es peor que no
+   *    apuntar a ninguna, porque `isDefault` se calcula contra esa referencia y
+   *    una referencia muerta deja **todas** las tarjetas sin marcar.
+   *  · **Borrar algo que ya no está responde 200, no 404.** Si la tarjeta no
+   *    aparece entre las suyas, el resultado que pedía ya se cumple. Devolver
+   *    un error dejaría a la app enseñando un fallo por un reintento que, de
+   *    hecho, funcionó.
+   */
+  @Delete('by-payer/:payerId/:cardRef')
+  @HttpCode(200)
+  async borrar(@Param('payerId') payerId: string, @Param('cardRef') cardRef: string) {
+    const provider = this.registry.paraCobroNuevo(['savedCards']);
+    if (!provider.findCustomer) {
+      throw new BadRequestException('Esta pasarela no sabe buscar tarjetas por pagador.');
+    }
+
+    const customerRef = await provider.findCustomer(payerId);
+    const suyas = customerRef ? await provider.listCards(customerRef) : [];
+
+    if (suyas.some((t) => t.providerRef === cardRef)) {
+      await provider.deleteCard(cardRef);
+    }
+
+    // Fuera del `if` a propósito: si la tarjeta ya no estaba pero la
+    // preferencia seguía apuntándole, esto es justo lo que hay que limpiar.
+    const preferida = await this.preferidas.obtener(payerId, provider.name);
+    if (preferida === cardRef) await this.preferidas.olvidar(payerId);
+
+    return { payerId, provider: provider.name, cardRef, borrada: true };
   }
 
   @Get(':customerRef')
