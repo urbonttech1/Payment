@@ -12,8 +12,10 @@
  *     el servicio sin cobrar y a quien la pegó sin enterarse hasta el primer
  *     viaje.
  *  2. **Nunca se devuelven.** El panel ve los últimos cuatro caracteres, quién
- *     la puso y cuándo. Una API que devuelve la clave secreta convierte
- *     cualquier fallo de permisos del panel en una fuga de la caja.
+ *     la puso y cuándo; de cada campo, si está puesto y su vista enmascarada
+ *     (los no secretos, como la localización o el Application ID, salen enteros).
+ *     Una API que devuelve la clave secreta convierte cualquier fallo de
+ *     permisos del panel en una fuga de la caja.
  *  3. **Se guardan cifradas**, con la clave maestra fuera de la base.
  *  4. **El entorno gana al arrancar.** Si una pasarela ya viene por variables
  *     de entorno, esas mandan: es lo que hay desplegado y no se le cambia el
@@ -63,6 +65,37 @@ export const CAMPOS: Record<string, CampoDeCredencial[]> = {
   ],
 };
 
+/** Lo que el panel puede ver de un campo guardado. */
+export interface VistaDeCampo {
+  puesto: boolean;
+  /**
+   * Un secreto: solo sus últimos cuatro caracteres (`••••1234`, igual que `pista`).
+   * Un campo no secreto: su valor, que no es una clave. `null` si está vacío.
+   */
+  vista: string | null;
+}
+
+/**
+ * Qué campos hay puestos, para poder validar lo guardado sin volver a enseñar
+ * una sola clave. Los secretos salen enmascarados y solo los campos marcados
+ * `secreto: false` (localización, entorno, Application ID…) salen enteros.
+ * Lo guardado que no figure en `campos` —la URL del webhook, por ejemplo— no sale.
+ */
+export function vistaDeLosCampos(
+  campos: CampoDeCredencial[],
+  guardado: Record<string, unknown>,
+): Record<string, VistaDeCampo> {
+  const salida: Record<string, VistaDeCampo> = {};
+  for (const campo of campos) {
+    const crudo = guardado[campo.nombre];
+    const valor = typeof crudo === 'string' ? crudo.trim() : '';
+    salida[campo.nombre] = !valor
+      ? { puesto: false, vista: null }
+      : { puesto: true, vista: campo.secreto ? pista(valor) : valor };
+  }
+  return salida;
+}
+
 export interface CredencialParaElPanel {
   provider: ProviderName;
   /** Lo único que se ve de la clave. */
@@ -77,6 +110,11 @@ export interface CredencialParaElPanel {
   /** `entorno` si manda una variable de entorno; `panel` si manda esta tabla. */
   origen: 'entorno' | 'panel' | 'ninguno';
   campos: CampoDeCredencial[];
+  /**
+   * Qué hay guardado en cada campo (ver `vistaDeLosCampos`). `null` si no hay
+   * nada guardado en el panel o no se pudo leer; no rompe el listado.
+   */
+  valores: Record<string, VistaDeCampo> | null;
   /** Los enlaces que hay que pegar en el panel de esa pasarela. */
   webhooks: EnlaceWebhook[];
 }
@@ -158,6 +196,7 @@ export class CredentialsService implements OnModuleInit, OnModuleDestroy {
         montado: montados.has(provider),
         origen,
         campos: CAMPOS[nombre],
+        valores: fila ? this.vistaGuardada(provider, fila.secreto_cifrado) : null,
         webhooks: enlacesDeWebhook(this.config.PAYMENTS_PUBLIC_URL, nombre, this.urlVerificada(provider)),
       };
     });
@@ -228,6 +267,19 @@ export class CredentialsService implements OnModuleInit, OnModuleDestroy {
   }
 
   // ── Interno ───────────────────────────────────────────────────────────────
+
+  /** Descifra lo guardado solo para enmascararlo: lo que sale no contiene ningún secreto entero. */
+  private vistaGuardada(provider: ProviderName, blob: string): Record<string, VistaDeCampo> | null {
+    if (!this.cifradoDisponible) return null;
+    try {
+      const guardado = JSON.parse(descifrar(blob, claveMaestra(this.config.CREDENTIALS_KEY))) as Record<string, unknown>;
+      return vistaDeLosCampos(CAMPOS[provider] ?? [], guardado);
+    } catch (e) {
+      // Un blob que no se lee no tiene por qué tumbar el listado: el panel sigue viendo la pista.
+      this.log.warn(`No se pudo leer lo guardado de '${provider}': ${e instanceof Error ? e.message : String(e)}`);
+      return null;
+    }
+  }
 
   private async leerFilas() {
     try {
